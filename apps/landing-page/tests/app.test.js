@@ -31,3 +31,20 @@ test("download endpoint maps firefox package", async () => {
     server.close();
   }
 });
+
+test("landing page renders PRIVAPDF scaffold", async () => {
+  const app = createApp();
+  const server = app.listen(0);
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/`);
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /PRIVAPDF/);
+    assert.match(html, /Cross-browser, local-first PDF toolkit platform\./);
+    assert.match(html, /Download extension/);
+  } finally {
+    server.close();
+  }
+});

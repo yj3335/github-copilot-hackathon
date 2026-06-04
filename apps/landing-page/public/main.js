@@ -6,7 +6,6 @@ const browsers = [
 ];
 
 const primaryButton = document.querySelector("#primary-download");
-const alternateDownloads = document.querySelector("#alternate-downloads");
 
 async function fetchBrowser() {
   const response = await fetch("/api/browser");
@@ -29,36 +28,20 @@ async function handleDownload(browser) {
   window.location.href = payload.url;
 }
 
-function renderAlternates(primaryBrowser) {
-  alternateDownloads.replaceChildren();
-
-  for (const entry of browsers.filter((item) => item.browser !== primaryBrowser)) {
-    const button = document.createElement("button");
-    button.className = "secondary-action";
-    button.type = "button";
-    button.textContent = `Download for ${entry.label}`;
-    button.addEventListener("click", () => handleDownload(entry.browser));
-    alternateDownloads.append(button);
-  }
-}
-
 fetchBrowser()
   .then((detected) => {
     const primary = browsers.find((item) => item.browser === detected.browser);
 
     if (!primary) {
-      primaryButton.textContent = "Choose your browser";
-      primaryButton.disabled = true;
-      renderAlternates("");
+      primaryButton.textContent = "Download extension";
+      primaryButton.addEventListener("click", () => handleDownload(""));
       return;
     }
 
     primaryButton.textContent = `Download for ${primary.label}`;
     primaryButton.addEventListener("click", () => handleDownload(primary.browser));
-    renderAlternates(primary.browser);
   })
   .catch(() => {
-    primaryButton.textContent = "Choose your browser";
-    primaryButton.disabled = true;
-    renderAlternates("");
+    primaryButton.textContent = "Download extension";
+    primaryButton.addEventListener("click", () => handleDownload(""));
   });

@@ -2,6 +2,10 @@ param location string = resourceGroup().location
 param environmentName string = 'pdf-toolkit-env'
 param appName string = 'pdf-toolkit-landing-page'
 param containerImage string
+param registryServer string
+param registryUsername string
+@secure()
+param registryPassword string
 
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
@@ -15,6 +19,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: managedEnvironment.id
     configuration: {
+      secrets: [
+        {
+          name: 'registry-password'
+          value: registryPassword
+        }
+      ]
+      registries: [
+        {
+          server: registryServer
+          username: registryUsername
+          passwordSecretRef: 'registry-password'
+        }
+      ]
       ingress: {
         external: true
         targetPort: 3000
