@@ -11,7 +11,6 @@ import {
   parseSplitRangeInput,
   parsePageRangeInput,
   rotatePdfPages,
-  sanitizeFilename,
   splitPdfByRanges,
   splitPdfEveryNPages,
   splitPdfIntoEqualParts,
@@ -52,6 +51,8 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
+type ToolMode = "extract" | "delete" | "rotate" | "split";
+type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
   getPage(pageNumber: number): Promise<{
@@ -182,6 +183,8 @@ function WorkspaceApp() {
   const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
   const [operationHistory, setOperationHistory] = useState<OperationHistoryEntry[]>([]);
   const [undoStack, setUndoStack] = useState<File[]>([]);
+  const [activeTool, setActiveTool] = useState<ToolMode>("extract");
+  const [rotateAngle, setRotateAngle] = useState<RotateAngle>(90);
   const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
   const [splitValue, setSplitValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -289,6 +292,11 @@ function WorkspaceApp() {
   );
 
   const selectedPageSet = useMemo(() => new Set(selectedPages), [selectedPages]);
+  const effectiveTargetPages = useMemo(
+    () => (parsedRange.pages.length > 0 ? parsedRange.pages : selectedPages),
+    [parsedRange.pages, selectedPages]
+  );
+  const pageSelectionSource = parsedRange.pages.length > 0 ? "range" : "thumbnails";
 
   const selectedRangeSummary = useMemo(() => {
     if (selectedPages.length === 0) {
@@ -297,6 +305,62 @@ function WorkspaceApp() {
 
     return [...selectedPages].sort((left, right) => left - right).join(", ");
   }, [selectedPages]);
+
+  const targetPageSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to target pages.";
+    }
+
+    if (effectiveTargetPages.length === 0) {
+      return "No pages targeted yet. Select thumbnails or enter a page range.";
+    }
+
+    return `${effectiveTargetPages.length} page${effectiveTargetPages.length === 1 ? "" : "s"} targeted from ${pageSelectionSource}: ${effectiveTargetPages.join(", ")}`;
+  }, [effectiveTargetPages, pageSelectionSource, summary]);
+
+  const splitSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to configure split output.";
+    }
+
+    if (!splitValue.trim()) {
+      return splitMode === "ranges"
+        ? "Enter split ranges like 1-3, 4-6, 7-9."
+        : splitMode === "equal-parts"
+          ? "Choose how many equal parts to create."
+          : "Choose how many pages each split should contain.";
+    }
+
+    if (splitMode === "ranges") {
+      if (!parsedSplitRanges.valid) {
+        return `Invalid split ranges: ${parsedSplitRanges.invalidEntries.join(", ")}`;
+      }
+
+      return `${parsedSplitRanges.ranges.length} split group${parsedSplitRanges.ranges.length === 1 ? "" : "s"} configured.`;
+    }
+
+    return splitMode === "equal-parts"
+      ? `Document will be divided into ${splitValue} parts.`
+      : `A new PDF will be created every ${splitValue} pages.`;
+  }, [parsedSplitRanges.invalidEntries, parsedSplitRanges.ranges.length, parsedSplitRanges.valid, splitMode, splitValue, summary]);
+
+  const activeToolTitle =
+    activeTool === "extract"
+      ? "Extract"
+      : activeTool === "delete"
+        ? "Delete"
+        : activeTool === "rotate"
+          ? "Rotate"
+          : "Split";
+
+  const activeToolDescription =
+    activeTool === "extract"
+      ? "Create a new PDF from the pages currently targeted."
+      : activeTool === "delete"
+        ? "Remove the targeted pages and keep the rest of the document."
+        : activeTool === "rotate"
+          ? "Rotate the targeted pages in place and refresh the working document."
+          : "Download a ZIP containing multiple PDFs based on your split settings.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -334,11 +398,32 @@ function WorkspaceApp() {
   };
 
   const getTargetPages = () => {
-    if (parsedRange.pages.length > 0) {
-      return parsedRange.pages;
+    return effectiveTargetPages;
+  };
+
+  const runActiveTool = async () => {
+    if (activeTool === "split") {
+      await runSplit();
+      return;
     }
 
-    return selectedPages;
+    if (activeTool === "extract") {
+      await runOperation("Extract");
+      return;
+    }
+
+    if (activeTool === "delete") {
+      await runOperation("Delete");
+      return;
+    }
+
+    const rotationOperation: Record<RotateAngle, ExecutableOperation> = {
+      90: "Rotate 90°",
+      180: "Rotate 180°",
+      270: "Rotate 270°"
+    };
+
+    await runOperation(rotationOperation[rotateAngle]);
   };
 
   const applyMutatedDocument = async (bytes: Uint8Array, filename: string) => {
@@ -519,6 +604,8 @@ function WorkspaceApp() {
       return;
     }
 
+    setLaunchContext(null);
+
     if (launchIntent === "merge") {
       const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > 500 * 1024 * 1024) {
@@ -671,6 +758,16 @@ function WorkspaceApp() {
             />
           </div>
 
+          {summary ? (
+            <div className="loaded-file-card panel-subtle">
+              <div className="eyebrow">Current file</div>
+              <strong>{summary.file.name}</strong>
+              <div className="muted">
+                {summary.pageCount} pages · {formatFileSize(summary.file.size)}
+              </div>
+            </div>
+          ) : null}
+
           <div className="field">
             <label htmlFor="page-range">Page range</label>
             <input
@@ -681,55 +778,130 @@ function WorkspaceApp() {
             />
           </div>
 
-          <div className="split-panel">
-            <div className="eyebrow">Split</div>
-            <div className="field">
-              <label htmlFor="split-mode">Split mode</label>
-              <select id="split-mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)}>
-                <option value="ranges">By ranges</option>
-                <option value="equal-parts">Equal parts</option>
-                <option value="every-n-pages">Every N pages</option>
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="split-value">
-                {splitMode === "ranges" ? "Ranges" : splitMode === "equal-parts" ? "Number of parts" : "Pages per split"}
-              </label>
-              <input
-                id="split-value"
-                inputMode={splitMode === "ranges" ? "text" : "numeric"}
-                placeholder={
-                  splitMode === "ranges"
-                    ? "1-3, 4-6, 7-10"
-                    : splitMode === "equal-parts"
-                      ? "3"
-                      : "5"
-                }
-                value={splitValue}
-                onChange={(event) => setSplitValue(event.target.value)}
-              />
-            </div>
-            <button className="button secondary" onClick={() => void runSplit()} type="button">
-              Split and download ZIP
+          <div className="tool-toolbar" role="tablist" aria-label="PDF tools">
+            <button
+              aria-selected={activeTool === "extract"}
+              className={`button secondary tool-tab${activeTool === "extract" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("extract")}
+              role="tab"
+              type="button"
+            >
+              Extract
+            </button>
+            <button
+              aria-selected={activeTool === "delete"}
+              className={`button secondary tool-tab${activeTool === "delete" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("delete")}
+              role="tab"
+              type="button"
+            >
+              Delete
+            </button>
+            <button
+              aria-selected={activeTool === "rotate"}
+              className={`button secondary tool-tab${activeTool === "rotate" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("rotate")}
+              role="tab"
+              type="button"
+            >
+              Rotate
+            </button>
+            <button
+              aria-selected={activeTool === "split"}
+              className={`button secondary tool-tab${activeTool === "split" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("split")}
+              role="tab"
+              type="button"
+            >
+              Split
             </button>
           </div>
 
-          <div className="operation-actions">
-            <button className="button secondary" onClick={() => void runOperation("Extract")} type="button">
-              Extract
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Delete")} type="button">
-              Delete
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 90°")} type="button">
-              Rotate 90°
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 180°")} type="button">
-              Rotate 180°
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 270°")} type="button">
-              Rotate 270°
-            </button>
+          <div className="tool-panel">
+            <div className="eyebrow">Active tool</div>
+            <div className="tool-panel-header">
+              <strong>{activeToolTitle}</strong>
+              <span className="tag">{activeTool === "split" ? "ZIP output" : "PDF output"}</span>
+            </div>
+            <p className="muted tool-description">{activeToolDescription}</p>
+
+            {activeTool === "rotate" ? (
+              <div className="field">
+                <label htmlFor="rotate-angle">Rotation</label>
+                <select
+                  id="rotate-angle"
+                  value={rotateAngle}
+                  onChange={(event) => setRotateAngle(Number(event.target.value) as RotateAngle)}
+                >
+                  <option value="90">90 degrees</option>
+                  <option value="180">180 degrees</option>
+                  <option value="270">270 degrees</option>
+                </select>
+              </div>
+            ) : null}
+
+            {activeTool === "split" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="split-mode">Split mode</label>
+                  <select
+                    id="split-mode"
+                    value={splitMode}
+                    onChange={(event) => setSplitMode(event.target.value as SplitMode)}
+                  >
+                    <option value="ranges">By ranges</option>
+                    <option value="equal-parts">Equal parts</option>
+                    <option value="every-n-pages">Every N pages</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="split-value">
+                    {splitMode === "ranges" ? "Ranges" : splitMode === "equal-parts" ? "Number of parts" : "Pages per split"}
+                  </label>
+                  <input
+                    id="split-value"
+                    inputMode={splitMode === "ranges" ? "text" : "numeric"}
+                    placeholder={
+                      splitMode === "ranges"
+                        ? "1-3, 4-6, 7-10"
+                        : splitMode === "equal-parts"
+                          ? "3"
+                          : "5"
+                    }
+                    value={splitValue}
+                    onChange={(event) => setSplitValue(event.target.value)}
+                  />
+                </div>
+                <div className="tool-summary">{splitSummary}</div>
+              </div>
+            ) : (
+              <div className="tool-summary">{targetPageSummary}</div>
+            )}
+
+            <div className="operation-actions">
+              <button className="button" onClick={() => void runActiveTool()} type="button">
+                {activeTool === "extract"
+                  ? "Extract selected pages"
+                  : activeTool === "delete"
+                    ? "Delete selected pages"
+                    : activeTool === "rotate"
+                      ? `Rotate selected pages ${rotateAngle}°`
+                      : "Split and download ZIP"}
+              </button>
+            </div>
+
+            {summary && parsedRange.pages.length > 0 ? (
+              <div className="tag">{parsedRange.pages.length} pages selected from range input</div>
+            ) : null}
+
+            {selectedPages.length > 0 ? (
+              <div className="tag">Selected pages: {selectedRangeSummary}</div>
+            ) : null}
+
+            {!parsedRange.valid ? (
+              <div className="notice">Invalid range entries: {parsedRange.invalidEntries.join(", ")}</div>
+            ) : null}
+
             <button
               className="button secondary"
               disabled={undoStack.length === 0}
@@ -739,18 +911,6 @@ function WorkspaceApp() {
               Undo
             </button>
           </div>
-
-          {summary && parsedRange.pages.length > 0 ? (
-            <div className="tag">{parsedRange.pages.length} pages selected from range input</div>
-          ) : null}
-
-          {selectedPages.length > 0 ? (
-            <div className="tag">Selected pages: {selectedRangeSummary}</div>
-          ) : null}
-
-          {!parsedRange.valid ? (
-            <div className="notice">Invalid range entries: {parsedRange.invalidEntries.join(", ")}</div>
-          ) : null}
 
           {notice ? <div className="notice">{notice}</div> : null}
         </aside>

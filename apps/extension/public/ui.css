@@ -128,6 +128,19 @@ a {
   background: rgba(255, 255, 255, 0.42);
 }
 
+.panel-subtle {
+  margin-top: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(31, 26, 22, 0.08);
+}
+
+.loaded-file-card {
+  display: grid;
+  gap: 6px;
+}
+
 .header-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -229,18 +242,58 @@ a {
   gap: 8px;
 }
 
+.tool-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.tool-tab {
+  justify-content: center;
+}
+
+.tool-tab.is-active {
+  background: var(--text);
+  color: white;
+}
+
+.tool-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(31, 26, 22, 0.08);
+}
+
+.tool-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.tool-description {
+  margin: 0;
+}
+
+.tool-summary {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(188, 75, 44, 0.08);
+  color: var(--text);
+}
+
 .operation-actions {
   display: grid;
   gap: 10px;
-  margin-top: 12px;
 }
 
 .split-panel {
   display: grid;
   gap: 10px;
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid rgba(31, 26, 22, 0.08);
 }
 
 .field input,
@@ -366,5 +419,10 @@ a {
 
   .header-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tool-panel-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
