@@ -53,7 +53,7 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
-type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge";
 type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
@@ -368,6 +368,14 @@ function WorkspaceApp() {
       : "Maximum rewrites pages into a fresh document for stronger size reduction.";
   }, [compressionLevel, summary]);
 
+  const mergeSummary = useMemo(() => {
+    if (mergeCandidates.length === 0) {
+      return "Choose two or more PDFs to stage a local merge.";
+    }
+
+    return `${mergeCandidates.length} file${mergeCandidates.length === 1 ? "" : "s"} staged for merge. Reorder them below before downloading.`;
+  }, [mergeCandidates.length]);
+
   const activeToolTitle =
     activeTool === "extract"
       ? "Extract"
@@ -377,7 +385,9 @@ function WorkspaceApp() {
           ? "Rotate"
           : activeTool === "split"
             ? "Split"
-            : "Compress";
+            : activeTool === "compress"
+              ? "Compress"
+              : "Merge";
 
   const activeToolDescription =
     activeTool === "extract"
@@ -388,7 +398,9 @@ function WorkspaceApp() {
           ? "Rotate the targeted pages in place and refresh the working document."
           : activeTool === "split"
             ? "Download a ZIP containing multiple PDFs based on your split settings."
-            : "Re-save the PDF with optimized object streams to reduce file size locally.";
+            : activeTool === "compress"
+              ? "Re-save the PDF with optimized object streams to reduce file size locally."
+              : "Choose multiple PDFs, order them, and download a merged document.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -432,6 +444,11 @@ function WorkspaceApp() {
   const runActiveTool = async () => {
     if (activeTool === "split") {
       await runSplit();
+      return;
+    }
+
+    if (activeTool === "merge") {
+      await runMerge();
       return;
     }
 
@@ -664,7 +681,7 @@ function WorkspaceApp() {
 
     setLaunchContext(null);
 
-    if (launchIntent === "merge") {
+    if (launchIntent === "merge" || activeTool === "merge") {
       const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > 500 * 1024 * 1024) {
         setNotice("Selected merge files exceed the 500 MB limit. Reduce the selection and try again.");
@@ -673,6 +690,7 @@ function WorkspaceApp() {
 
       setMergeCandidates(selectedFiles);
       setActivePdfPassword(undefined);
+      setActiveTool("merge");
       setSummary(null);
       setThumbnails([]);
       setSelectedPages([]);
@@ -849,14 +867,14 @@ function WorkspaceApp() {
               {launchIntent === "merge" ? "or choose multiple PDFs from disk" : "or choose a file from disk"}
             </p>
             <button className="button" onClick={() => fileInputRef.current?.click()} type="button">
-              {launchIntent === "merge" ? "Select PDFs" : "Select PDF"}
+              {launchIntent === "merge" || activeTool === "merge" ? "Select PDFs" : "Select PDF"}
             </button>
             <input
               accept="application/pdf,.pdf"
               hidden
               ref={fileInputRef}
               type="file"
-              multiple={launchIntent === "merge"}
+              multiple={launchIntent === "merge" || activeTool === "merge"}
               onChange={(event) => {
                 void handleFiles(event.target.files);
               }}
@@ -929,6 +947,15 @@ function WorkspaceApp() {
             >
               Compress
             </button>
+            <button
+              aria-selected={activeTool === "merge"}
+              className={`button secondary tool-tab${activeTool === "merge" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("merge")}
+              role="tab"
+              type="button"
+            >
+              Merge
+            </button>
           </div>
 
           <div className="tool-panel">
@@ -988,6 +1015,21 @@ function WorkspaceApp() {
                 </div>
                 <div className="tool-summary">{splitSummary}</div>
               </div>
+            ) : activeTool === "merge" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="merge-stage">Merge staging</label>
+                  <input
+                    id="merge-stage"
+                    readOnly
+                    value={mergeCandidates.length > 0 ? `${mergeCandidates.length} files staged` : "No files staged yet"}
+                  />
+                </div>
+                <div className="tool-summary">{mergeSummary}</div>
+                <button className="button secondary" onClick={() => fileInputRef.current?.click()} type="button">
+                  Select PDFs to merge
+                </button>
+              </div>
             ) : activeTool === "compress" ? (
               <div className="split-panel">
                 <div className="field">
@@ -1017,7 +1059,9 @@ function WorkspaceApp() {
                       ? `Rotate selected pages ${rotateAngle}°`
                       : activeTool === "split"
                         ? "Split and download ZIP"
-                        : `Compress PDF (${compressionLevel})`}
+                        : activeTool === "compress"
+                          ? `Compress PDF (${compressionLevel})`
+                          : "Merge and download"}
               </button>
             </div>
 
