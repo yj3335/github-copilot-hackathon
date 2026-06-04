@@ -2,8 +2,19 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import {
+  deletePdfPages,
+  extractPdfPages,
   formatFileSize,
+  getCanonicalPdfBaseName,
+  getCanonicalPdfFilename,
+  mergePdfFiles,
+  parseSplitRangeInput,
   parsePageRangeInput,
+  rotatePdfPages,
+  sanitizeFilename,
+  splitPdfByRanges,
+  splitPdfEveryNPages,
+  splitPdfIntoEqualParts,
   validatePdfFile
 } from "../../../packages/pdf-core/src/index";
 
@@ -39,9 +50,52 @@ interface OperationHistoryEntry {
   timestamp: string;
 }
 
-async function renderThumbnail(file: File, pageNumber: number): Promise<ThumbnailItem> {
-  const buffer = await file.arrayBuffer();
-  const pdf = await getDocument({ data: buffer }).promise;
+type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
+type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
+
+type PdfPageReader = {
+  getPage(pageNumber: number): Promise<{
+    getViewport(options: { scale: number }): { width: number; height: number };
+    render(options: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }): {
+      promise: Promise<void>;
+    };
+  }>;
+};
+
+function formatPdfDate(rawValue: string | undefined): string {
+  if (!rawValue) {
+    return "Unknown";
+  }
+
+  const match = rawValue.match(/^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?/);
+  if (!match) {
+    return rawValue;
+  }
+
+  const [, year, month = "01", day = "01", hour = "00", minute = "00", second = "00"] = match;
+  const parsed = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second)
+  );
+
+  if (Number.isNaN(parsed.getTime())) {
+    return rawValue;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(parsed);
+}
+
+async function renderThumbnailFromPdf(pdf: PdfPageReader, pageNumber: number): Promise<ThumbnailItem> {
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale: 1 });
   const scale = 200 / Math.max(viewport.width, viewport.height);
@@ -65,6 +119,24 @@ async function renderThumbnail(file: File, pageNumber: number): Promise<Thumbnai
   };
 }
 
+async function renderAllThumbnails(
+  file: File,
+  pageCount: number,
+  onBatchRendered: (items: ThumbnailItem[]) => void
+) {
+  const buffer = await file.arrayBuffer();
+  const pdf = await getDocument({ data: buffer }).promise;
+  const batchSize = 8;
+
+  for (let start = 1; start <= pageCount; start += batchSize) {
+    const end = Math.min(start + batchSize - 1, pageCount);
+    const batchItems = await Promise.all(
+      Array.from({ length: end - start + 1 }, (_, index) => renderThumbnailFromPdf(pdf, start + index))
+    );
+    onBatchRendered(batchItems);
+  }
+}
+
 async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
   const buffer = await file.arrayBuffer();
   const documentTask = getDocument({ data: buffer });
@@ -76,10 +148,23 @@ async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
     file,
     title: info?.Title || file.name,
     author: info?.Author || "Unknown",
-    createdAt: info?.CreationDate || "Unknown",
-    modifiedAt: info?.ModDate || "Unknown",
+    createdAt: formatPdfDate(info?.CreationDate),
+    modifiedAt: formatPdfDate(info?.ModDate),
     pageCount: pdf.numPages
   };
+}
+
+function triggerDownload(bytes: Uint8Array, filename: string, mimeType = "application/pdf") {
+  const payload = Uint8Array.from(bytes);
+  const blob = new Blob([payload], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 function WorkspaceApp() {
@@ -96,6 +181,9 @@ function WorkspaceApp() {
   const [previewThumbnail, setPreviewThumbnail] = useState<ThumbnailItem | null>(null);
   const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
   const [operationHistory, setOperationHistory] = useState<OperationHistoryEntry[]>([]);
+  const [undoStack, setUndoStack] = useState<File[]>([]);
+  const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
+  const [splitValue, setSplitValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -147,6 +235,14 @@ function WorkspaceApp() {
     return parsePageRangeInput(rangeInput, summary.pageCount);
   }, [rangeInput, summary]);
 
+  const parsedSplitRanges = useMemo(() => {
+    if (!summary || splitMode !== "ranges") {
+      return { valid: true, ranges: [], invalidEntries: [] };
+    }
+
+    return parseSplitRangeInput(splitValue, summary.pageCount);
+  }, [splitMode, splitValue, summary]);
+
   useEffect(() => {
     if (!previewThumbnail) {
       return;
@@ -163,6 +259,29 @@ function WorkspaceApp() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [previewThumbnail]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void runUndo();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  });
 
   const renderedPageNumbers = useMemo(
     () => thumbnails.map((thumbnail) => thumbnail.pageNumber).sort((left, right) => left - right),
@@ -222,48 +341,137 @@ function WorkspaceApp() {
     return selectedPages;
   };
 
-  const stageOperation = (name: string) => {
+  const applyMutatedDocument = async (bytes: Uint8Array, filename: string) => {
+    const payload = Uint8Array.from(bytes);
+    const nextFile = new File([payload], getCanonicalPdfFilename(filename), { type: "application/pdf" });
+    await processFile(nextFile);
+  };
+
+  const pushUndoState = (file: File) => {
+    setUndoStack((current) => [...current, file].slice(-10));
+  };
+
+  const runUndo = async () => {
+    const previousFile = undoStack.at(-1);
+    if (!previousFile) {
+      setNotice("No undoable operations remain.");
+      return;
+    }
+
+    setUndoStack((current) => current.slice(0, -1));
+    setOperationProgress({ name: "Undo", percent: 40 });
+
+    try {
+      await processFile(previousFile);
+      setOperationProgress({ name: "Undo", percent: 100 });
+      setNotice(`Restored ${previousFile.name}.`);
+      setOperationHistory((current) => [
+        {
+          id: `Undo-${Date.now()}`,
+          name: "Undo",
+          pages: "Previous document state",
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("undo_failed", { timestamp: new Date().toISOString(), error });
+      setNotice("The previous document state could not be restored.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
+  const runOperation = async (name: ExecutableOperation) => {
     if (!summary) {
-      setNotice("Load a PDF before staging an operation.");
+      setNotice("Load a PDF before running an operation.");
       return;
     }
 
     if (!parsedRange.valid) {
-      setNotice("Fix the invalid page range before staging an operation.");
+      setNotice("Fix the invalid page range before running an operation.");
       return;
     }
 
     const targetPages = getTargetPages();
     if (targetPages.length === 0) {
-      setNotice("Select pages or enter a page range before staging an operation.");
+      setNotice("Select pages or enter a page range before running an operation.");
       return;
     }
 
-    const progressSteps = [20, 45, 70, 100];
-    let currentStep = 0;
-    setOperationProgress({ name, percent: progressSteps[0] });
+    if (name === "Delete" && targetPages.length >= summary.pageCount) {
+      setNotice("At least one page must remain in the document.");
+      return;
+    }
 
-    const timer = window.setInterval(() => {
-      currentStep += 1;
+    setOperationProgress({ name, percent: 15 });
+    setNotice(null);
 
-      if (currentStep >= progressSteps.length) {
-        window.clearInterval(timer);
-        setOperationProgress(null);
-        setNotice(`${name} staged for pages ${targetPages.join(", ")}. Connect this to the PDF worker next.`);
-        setOperationHistory((current) => [
-          {
-            id: `${name}-${Date.now()}`,
-            name,
-            pages: targetPages.join(", "),
-            timestamp: new Date().toLocaleTimeString()
-          },
-          ...current
-        ].slice(0, 10));
-        return;
+    try {
+      const baseName = getCanonicalPdfBaseName(summary.file.name);
+      setOperationProgress({ name, percent: 45 });
+
+      if (name === "Extract") {
+        const result = await extractPdfPages(summary.file, targetPages);
+        setOperationProgress({ name, percent: 100 });
+        triggerDownload(result.bytes, result.filename || `${baseName}-extract.pdf`);
+        setNotice(`Extracted ${result.pageCount} pages and started the download.`);
       }
 
-      setOperationProgress({ name, percent: progressSteps[currentStep] });
-    }, 140);
+      if (name === "Delete") {
+        const confirmed = window.confirm(`Delete pages ${targetPages.join(", ")}?`);
+        if (!confirmed) {
+          setOperationProgress(null);
+          setNotice("Delete operation cancelled.");
+          return;
+        }
+
+        pushUndoState(summary.file);
+        const result = await deletePdfPages(summary.file, targetPages);
+        setOperationProgress({ name, percent: 100 });
+        await applyMutatedDocument(result.bytes, result.filename || `${baseName}-delete.pdf`);
+        setNotice(`Deleted ${targetPages.length} pages and refreshed the workspace.`);
+      }
+
+      if (name === "Rotate 90°") {
+        pushUndoState(summary.file);
+        const result = await rotatePdfPages(summary.file, targetPages, 90);
+        setOperationProgress({ name, percent: 100 });
+        await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-90.pdf`);
+        setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
+      }
+
+      if (name === "Rotate 180°") {
+        pushUndoState(summary.file);
+        const result = await rotatePdfPages(summary.file, targetPages, 180);
+        setOperationProgress({ name, percent: 100 });
+        await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-180.pdf`);
+        setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
+      }
+
+      if (name === "Rotate 270°") {
+        pushUndoState(summary.file);
+        const result = await rotatePdfPages(summary.file, targetPages, 270);
+        setOperationProgress({ name, percent: 100 });
+        await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-270.pdf`);
+        setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
+      }
+
+      setOperationHistory((current) => [
+        {
+          id: `${name}-${Date.now()}`,
+          name,
+          pages: targetPages.join(", "),
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: name, timestamp: new Date().toISOString(), error });
+      setNotice(`The ${name.toLowerCase()} operation could not be completed locally.`);
+    } finally {
+      setOperationProgress(null);
+    }
   };
 
   const processFile = async (file: File) => {
@@ -288,16 +496,14 @@ function WorkspaceApp() {
 
       const pdfSummary = await loadPdfSummary(file);
       setSummary(pdfSummary);
+      setThumbnails([]);
       setSelectedPages([]);
       setLastSelectedPage(null);
       setPreviewThumbnail(null);
 
-      const previewPages = Array.from(
-        { length: Math.min(pdfSummary.pageCount, 12) },
-        (_, index) => index + 1
-      );
-      const rendered = await Promise.all(previewPages.map((pageNumber) => renderThumbnail(file, pageNumber)));
-      setThumbnails(rendered);
+      await renderAllThumbnails(file, pdfSummary.pageCount, (batchItems) => {
+        setThumbnails((current) => [...current, ...batchItems]);
+      });
     } catch (error) {
       console.error("load_failed", { timestamp: new Date().toISOString(), error });
       setNotice("The selected PDF could not be processed locally. Check that the file is a valid PDF.");
@@ -353,6 +559,88 @@ function WorkspaceApp() {
     });
   };
 
+  const runMerge = async () => {
+    if (mergeCandidates.length < 2) {
+      setNotice("Select at least two PDFs before running merge.");
+      return;
+    }
+
+    setOperationProgress({ name: "Merge", percent: 20 });
+    setNotice(null);
+
+    try {
+      setOperationProgress({ name: "Merge", percent: 55 });
+      const result = await mergePdfFiles(mergeCandidates);
+      setOperationProgress({ name: "Merge", percent: 100 });
+      triggerDownload(result.bytes, result.filename || "merged.pdf");
+      setNotice(`Merged ${mergeCandidates.length} PDFs and started the download.`);
+      setOperationHistory((current) => [
+        {
+          id: `Merge-${Date.now()}`,
+          name: "Merge",
+          pages: `${mergeCandidates.length} files`,
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Merge", timestamp: new Date().toISOString(), error });
+      setNotice("The merge operation could not be completed locally.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
+  const runSplit = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before running split.");
+      return;
+    }
+
+    setOperationProgress({ name: "Split", percent: 20 });
+    setNotice(null);
+
+    try {
+      let result;
+
+      if (splitMode === "ranges") {
+        if (!parsedSplitRanges.valid) {
+          setNotice(`Invalid split ranges: ${parsedSplitRanges.invalidEntries.join(", ")}`);
+          setOperationProgress(null);
+          return;
+        }
+        setOperationProgress({ name: "Split", percent: 50 });
+        result = await splitPdfByRanges(summary.file, splitValue);
+      } else if (splitMode === "equal-parts") {
+        const partCount = Number(splitValue);
+        setOperationProgress({ name: "Split", percent: 50 });
+        result = await splitPdfIntoEqualParts(summary.file, partCount);
+      } else {
+        const segmentSize = Number(splitValue);
+        setOperationProgress({ name: "Split", percent: 50 });
+        result = await splitPdfEveryNPages(summary.file, segmentSize);
+      }
+
+      setOperationProgress({ name: "Split", percent: 100 });
+      triggerDownload(result.bytes, result.filename, "application/zip");
+      setNotice(`Created ${result.entryCount} split PDFs and started the ZIP download.`);
+      setOperationHistory((current) => [
+        {
+          id: `Split-${Date.now()}`,
+          name: "Split",
+          pages: splitMode === "ranges" ? splitValue : `${splitMode}: ${splitValue}`,
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Split", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "The split operation could not be completed locally.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
   return (
     <main className="workspace-shell">
       <div className="workspace-layout">
@@ -393,15 +681,62 @@ function WorkspaceApp() {
             />
           </div>
 
+          <div className="split-panel">
+            <div className="eyebrow">Split</div>
+            <div className="field">
+              <label htmlFor="split-mode">Split mode</label>
+              <select id="split-mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)}>
+                <option value="ranges">By ranges</option>
+                <option value="equal-parts">Equal parts</option>
+                <option value="every-n-pages">Every N pages</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="split-value">
+                {splitMode === "ranges" ? "Ranges" : splitMode === "equal-parts" ? "Number of parts" : "Pages per split"}
+              </label>
+              <input
+                id="split-value"
+                inputMode={splitMode === "ranges" ? "text" : "numeric"}
+                placeholder={
+                  splitMode === "ranges"
+                    ? "1-3, 4-6, 7-10"
+                    : splitMode === "equal-parts"
+                      ? "3"
+                      : "5"
+                }
+                value={splitValue}
+                onChange={(event) => setSplitValue(event.target.value)}
+              />
+            </div>
+            <button className="button secondary" onClick={() => void runSplit()} type="button">
+              Split and download ZIP
+            </button>
+          </div>
+
           <div className="operation-actions">
-            <button className="button" onClick={() => stageOperation("Extract")} type="button">
+            <button className="button secondary" onClick={() => void runOperation("Extract")} type="button">
               Extract
             </button>
-            <button className="button secondary" onClick={() => stageOperation("Delete")} type="button">
+            <button className="button secondary" onClick={() => void runOperation("Delete")} type="button">
               Delete
             </button>
-            <button className="button secondary" onClick={() => stageOperation("Rotate 90°")} type="button">
+            <button className="button secondary" onClick={() => void runOperation("Rotate 90°")} type="button">
               Rotate 90°
+            </button>
+            <button className="button secondary" onClick={() => void runOperation("Rotate 180°")} type="button">
+              Rotate 180°
+            </button>
+            <button className="button secondary" onClick={() => void runOperation("Rotate 270°")} type="button">
+              Rotate 270°
+            </button>
+            <button
+              className="button secondary"
+              disabled={undoStack.length === 0}
+              onClick={() => void runUndo()}
+              type="button"
+            >
+              Undo
             </button>
           </div>
 
@@ -441,6 +776,11 @@ function WorkspaceApp() {
               <p className="muted">
                 This shell now captures the popup merge intent and validates the file-size cap locally. The merge engine and drag reordering flow can build on this staged list.
               </p>
+              <div className="merge-toolbar">
+                <button className="button" onClick={() => void runMerge()} type="button">
+                  Merge and download
+                </button>
+              </div>
               <div className="merge-list">
                 {mergeCandidates.map((file, index) => (
                   <article className="merge-card" key={`${file.name}-${index}`}>

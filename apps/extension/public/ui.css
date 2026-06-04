@@ -154,6 +154,10 @@ a {
   margin-bottom: 20px;
 }
 
+.merge-toolbar {
+  margin: 16px 0;
+}
+
 .merge-card {
   padding: 14px;
   border-radius: 16px;
@@ -229,6 +233,14 @@ a {
   display: grid;
   gap: 10px;
   margin-top: 12px;
+}
+
+.split-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(31, 26, 22, 0.08);
 }
 
 .field input,
