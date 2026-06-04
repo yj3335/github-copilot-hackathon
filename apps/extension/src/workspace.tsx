@@ -1029,6 +1029,40 @@ function WorkspaceApp() {
                 <button className="button secondary" onClick={() => fileInputRef.current?.click()} type="button">
                   Select PDFs to merge
                 </button>
+                {mergeCandidates.length > 0 ? (
+                  <div className="merge-list">
+                    {mergeCandidates.map((file, index) => (
+                      <article className="merge-card" key={`${file.name}-${index}`}>
+                        <div className="merge-card-header">
+                          <div>
+                            <strong>{index + 1}. {file.name}</strong>
+                            <div className="muted">{formatFileSize(file.size)}</div>
+                          </div>
+                          <div className="merge-card-actions">
+                            <button
+                              aria-label={`Move ${file.name} up`}
+                              className="button secondary"
+                              disabled={index === 0}
+                              onClick={() => moveMergeCandidate(index, -1)}
+                              type="button"
+                            >
+                              Up
+                            </button>
+                            <button
+                              aria-label={`Move ${file.name} down`}
+                              className="button secondary"
+                              disabled={index === mergeCandidates.length - 1}
+                              onClick={() => moveMergeCandidate(index, 1)}
+                              type="button"
+                            >
+                              Down
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : activeTool === "compress" ? (
               <div className="split-panel">
@@ -1104,7 +1138,7 @@ function WorkspaceApp() {
             </div>
           ) : null}
 
-          {mergeCandidates.length > 0 ? (
+          {mergeCandidates.length > 0 && activeTool !== "merge" ? (
             <>
               <div className="eyebrow">Merge staging</div>
               <h2>Ready to order {mergeCandidates.length} files</h2>
