@@ -2,13 +2,13 @@
 
 ## Introduction
 
-A cross-browser PDF toolkit extension that enables users to perform comprehensive PDF operations (extract, split, merge, delete pages, rotate, reorder, and more) entirely on their local machine. The system consists of three major components: (1) the browser extension itself with a rich UI for PDF manipulation, (2) a landing/download page hosted on Azure for extension distribution, and (3) the DevOps/cloud infrastructure for building, packaging, and distributing extension builds across Chrome, Firefox, Edge, and Safari.
+A cross-browser pdfsave extension that enables users to perform comprehensive PDF operations (extract, split, merge, delete pages, rotate, reorder, and more) entirely on their local machine. The system consists of three major components: (1) the browser extension itself with a rich UI for PDF manipulation, (2) a landing/download page hosted on Azure for extension distribution, and (3) the DevOps/cloud infrastructure for building, packaging, and distributing extension builds across Chrome, Firefox, Edge, and Safari.
 
 All PDF processing occurs client-side using WebAssembly or JavaScript-based PDF libraries. No PDF content is ever transmitted to external servers, ensuring complete user privacy.
 
 ## Glossary
 
-- **Extension**: The cross-browser PDF toolkit browser extension installed by the user
+- **Extension**: The cross-browser pdfsave browser extension installed by the user
 - **Popup_UI**: The small interface that appears when the user clicks the extension icon in the browser toolbar
 - **Workspace_View**: The full-page PDF workspace interface opened in a dedicated browser tab for complex operations
 - **PDF_Engine**: The local WebAssembly or JavaScript-based PDF processing library embedded within the extension
@@ -144,7 +144,7 @@ All PDF processing occurs client-side using WebAssembly or JavaScript-based PDF 
 
 ### Requirement 10: Cross-Browser Compatibility
 
-**User Story:** As a developer, I want the extension to work across Chrome, Firefox, Edge, and Safari, so that all users can access the PDF toolkit regardless of their browser choice.
+**User Story:** As a developer, I want the extension to work across Chrome, Firefox, Edge, and Safari, so that all users can access pdfsave regardless of their browser choice.
 
 #### Acceptance Criteria
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "PDF Toolkit",
+  "name": "pdfsave",
   "version": "0.1.0",
-  "description": "Local-first PDF toolkit extension.",
+  "description": "Local-first pdfsave extension.",
   "action": {
     "default_popup": "popup.html"
   },

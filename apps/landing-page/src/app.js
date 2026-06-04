@@ -28,7 +28,7 @@ export function createApp() {
   app.get("/api/download", (request, response) => {
     const requestedBrowser = String(request.query.browser || "").toLowerCase();
     const browser = detectBrowser(request.get("user-agent"));
-    const targetBrowser = requestedBrowser || browser.name;
+    const targetBrowser = requestedBrowser || browser.browser;
 
     let packagePath = "";
     if (targetBrowser.includes("chrome")) {
