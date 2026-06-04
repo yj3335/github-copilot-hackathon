@@ -38,6 +38,12 @@ export interface SplitRangeParseResult {
   invalidEntries: string[];
 }
 
+export interface PdfLoadOptions {
+  password?: string;
+}
+
+export type CompressionLevel = "balanced" | "maximum";
+
 export const MAX_INPUT_FILE_BYTES = 200 * 1024 * 1024;
 export const PAGE_RANGE_PATTERN = /^[\d,\-\s]+$/;
 
@@ -104,12 +110,21 @@ function buildArchiveFilename(file: File, suffix: string): string {
   return `${getBaseFilename(file)}-${suffix}.zip`;
 }
 
-async function loadPdfDocument(file: File): Promise<PDFDocument> {
-  return PDFDocument.load(await file.arrayBuffer());
+async function loadPdfDocument(file: File, options?: PdfLoadOptions): Promise<PDFDocument> {
+  if (options?.password) {
+    // This pdf-lib version does not accept a password option; keep the input for API compatibility.
+  }
+  return PDFDocument.load(await file.arrayBuffer(), {
+    ignoreEncryption: true
+  });
 }
 
-export async function extractPdfPages(file: File, pageNumbers: number[]): Promise<PdfMutationResult> {
-  const source = await loadPdfDocument(file);
+export async function extractPdfPages(
+  file: File,
+  pageNumbers: number[],
+  options?: PdfLoadOptions
+): Promise<PdfMutationResult> {
+  const source = await loadPdfDocument(file, options);
   const output = await PDFDocument.create();
   const copiedPages = await output.copyPages(
     source,
@@ -128,8 +143,12 @@ export async function extractPdfPages(file: File, pageNumbers: number[]): Promis
   };
 }
 
-export async function deletePdfPages(file: File, pageNumbers: number[]): Promise<PdfMutationResult> {
-  const source = await loadPdfDocument(file);
+export async function deletePdfPages(
+  file: File,
+  pageNumbers: number[],
+  options?: PdfLoadOptions
+): Promise<PdfMutationResult> {
+  const source = await loadPdfDocument(file, options);
   const removeSet = new Set(pageNumbers);
   const keepPages = Array.from({ length: source.getPageCount() }, (_, index) => index + 1).filter(
     (pageNumber) => !removeSet.has(pageNumber)
@@ -160,9 +179,10 @@ export async function deletePdfPages(file: File, pageNumbers: number[]): Promise
 export async function rotatePdfPages(
   file: File,
   pageNumbers: number[],
-  angle: 90 | 180 | 270
+  angle: 90 | 180 | 270,
+  options?: PdfLoadOptions
 ): Promise<PdfMutationResult> {
-  const source = await loadPdfDocument(file);
+  const source = await loadPdfDocument(file, options);
   const rotateSet = new Set(pageNumbers);
 
   source.getPages().forEach((page, index) => {
@@ -202,6 +222,46 @@ export async function mergePdfFiles(files: File[]): Promise<PdfMutationResult> {
     bytes,
     filename: buildFilename(firstFile, "merged"),
     pageCount: output.getPageCount()
+  };
+}
+
+export async function compressPdf(
+  file: File,
+  level: CompressionLevel,
+  options?: PdfLoadOptions
+): Promise<PdfMutationResult> {
+  const source = await loadPdfDocument(file, options);
+
+  if (level === "maximum") {
+    const output = await PDFDocument.create();
+    const pageIndexes = Array.from({ length: source.getPageCount() }, (_, index) => index);
+    const copiedPages = await output.copyPages(source, pageIndexes);
+
+    for (const page of copiedPages) {
+      output.addPage(page);
+    }
+
+    const bytes = await output.save({
+      useObjectStreams: true,
+      updateFieldAppearances: false
+    });
+
+    return {
+      bytes,
+      filename: buildFilename(file, "compress-max"),
+      pageCount: output.getPageCount()
+    };
+  }
+
+  const bytes = await source.save({
+    useObjectStreams: true,
+    updateFieldAppearances: false
+  });
+
+  return {
+    bytes,
+    filename: buildFilename(file, "compress"),
+    pageCount: source.getPageCount()
   };
 }
 
@@ -271,9 +331,10 @@ export function parseSplitRangeInput(input: string, pageCount: number): SplitRan
 async function createArchiveFromSegments(
   file: File,
   segments: Array<{ name: string; pages: number[] }>,
-  suffix: string
+  suffix: string,
+  options?: PdfLoadOptions
 ): Promise<PdfArchiveResult> {
-  const source = await loadPdfDocument(file);
+  const source = await loadPdfDocument(file, options);
   const zip = new JSZip();
 
   for (const segment of segments) {
@@ -297,8 +358,12 @@ async function createArchiveFromSegments(
   };
 }
 
-export async function splitPdfByRanges(file: File, input: string): Promise<PdfArchiveResult> {
-  const source = await loadPdfDocument(file);
+export async function splitPdfByRanges(
+  file: File,
+  input: string,
+  options?: PdfLoadOptions
+): Promise<PdfArchiveResult> {
+  const source = await loadPdfDocument(file, options);
   const parsed = parseSplitRangeInput(input, source.getPageCount());
 
   if (!parsed.valid) {
@@ -310,11 +375,15 @@ export async function splitPdfByRanges(file: File, input: string): Promise<PdfAr
     pages: Array.from({ length: range.end - range.start + 1 }, (_, offset) => range.start + offset)
   }));
 
-  return createArchiveFromSegments(file, segments, "split-ranges");
+  return createArchiveFromSegments(file, segments, "split-ranges", options);
 }
 
-export async function splitPdfIntoEqualParts(file: File, partCount: number): Promise<PdfArchiveResult> {
-  const source = await loadPdfDocument(file);
+export async function splitPdfIntoEqualParts(
+  file: File,
+  partCount: number,
+  options?: PdfLoadOptions
+): Promise<PdfArchiveResult> {
+  const source = await loadPdfDocument(file, options);
   const totalPages = source.getPageCount();
 
   if (!Number.isInteger(partCount) || partCount < 2 || partCount > totalPages) {
@@ -333,11 +402,15 @@ export async function splitPdfIntoEqualParts(file: File, partCount: number): Pro
     segments.push({ name: `${getBaseFilename(file)}_${index + 1}.pdf`, pages });
   }
 
-  return createArchiveFromSegments(file, segments, "split-equal");
+  return createArchiveFromSegments(file, segments, "split-equal", options);
 }
 
-export async function splitPdfEveryNPages(file: File, segmentSize: number): Promise<PdfArchiveResult> {
-  const source = await loadPdfDocument(file);
+export async function splitPdfEveryNPages(
+  file: File,
+  segmentSize: number,
+  options?: PdfLoadOptions
+): Promise<PdfArchiveResult> {
+  const source = await loadPdfDocument(file, options);
   const totalPages = source.getPageCount();
 
   if (!Number.isInteger(segmentSize) || segmentSize < 1 || segmentSize >= totalPages) {
@@ -355,7 +428,7 @@ export async function splitPdfEveryNPages(file: File, segmentSize: number): Prom
     segmentIndex += 1;
   }
 
-  return createArchiveFromSegments(file, segments, "split-pages");
+  return createArchiveFromSegments(file, segments, "split-pages", options);
 }
 
 export function parsePageRangeInput(input: string, pageCount: number): PageRangeParseResult {

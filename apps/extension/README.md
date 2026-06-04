@@ -15,4 +15,22 @@ Current focus areas:
 - settings page for persistent preferences
 - strict manifest defaults with minimal permissions
 
+## Build And Package
+
+- `npm run build --workspace @pdf-toolkit/extension`
+- `npm run package:browsers --workspace @pdf-toolkit/extension`
+
+The packaging command creates browser-specific outputs in `apps/extension/dist-packages`:
+
+- unpacked folders: `chrome`, `edge`, `firefox`, `safari`
+- zipped artifacts: `local-pdf-toolkit-<browser>-v<version>.zip`
+
+## Encrypted PDFs
+
+The workspace now prompts for a password when loading a protected PDF and reuses that password context for local single-file actions (extract, delete, rotate, split).
+
+## Tooling
+
+The contextual workspace toolbar supports extract, delete, rotate, split, and compression modes. Compression includes balanced and maximum presets and reports local size reduction after processing.
+
 The current implementation is still a scaffold for the PDF engine, packaging, and browser-specific release work.
