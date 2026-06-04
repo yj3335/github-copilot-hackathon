@@ -26,6 +26,9 @@ PDF Toolkit Platform delivers a complete browser-extension workflow for day-to-d
 	- Split to ZIP (ranges, equal parts, every N pages)
 	- Compress PDF (balanced and maximum modes)
 	- Merge PDFs
+    - Watermarking
+    - Password protection
+    - Esignature
 - Merge staging in sidebar with Up/Down controls and drag-and-drop ordering.
 - Undo for in-workspace document mutations.
 - Human-readable metadata dates and cleaner filename normalization across operations.
