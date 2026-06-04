@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "PDF Toolkit",
+  "name": "pdfsave",
   "version": "0.1.0",
-  "description": "Local-first PDF toolkit extension.",
+  "description": "Local-first pdfsave extension.",
   "action": {
     "default_popup": "popup.html"
   },
@@ -12,7 +12,7 @@
   "permissions": ["activeTab", "storage", "downloads"],
   "browser_specific_settings": {
     "gecko": {
-      "id": "pdf-toolkit@example.com",
+      "id": "pdfsave@example.com",
       "strict_min_version": "109.0"
     }
   },

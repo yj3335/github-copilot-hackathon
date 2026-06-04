@@ -19,7 +19,7 @@ function withBrowserManifest(baseManifest, browser) {
   if (browser === "firefox") {
     manifest.browser_specific_settings = {
       gecko: {
-        id: "local-pdf-toolkit@pdf-toolkit.local",
+        id: "pdfsave@pdfsave.local",
         strict_min_version: "109.0"
       }
     };

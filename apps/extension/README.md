@@ -1,4 +1,4 @@
-# Extension Shell
+# pdfsave Extension
 
 This folder now uses a single implementation path:
 
@@ -27,10 +27,20 @@ The packaging command creates browser-specific outputs in `apps/extension/dist-p
 
 ## Encrypted PDFs
 
-The workspace now prompts for a password when loading a protected PDF and reuses that password context for local single-file actions (extract, delete, rotate, split).
+The workspace prompts for a password when loading protected PDFs and reuses that context for local single-file actions.
 
 ## Tooling
 
-The contextual workspace toolbar supports extract, delete, rotate, split, and compression modes. Compression includes balanced and maximum presets and reports local size reduction after processing.
+The contextual workspace toolbar supports:
+
+- extract
+- delete
+- rotate
+- split
+- merge (with sidebar staging and drag-and-drop ordering)
+- compress
+- watermark (configurable text, font, color, opacity, rotation, and position)
+- unlock/remove-password (owner-password restricted PDFs)
+- e-sign (text signature placement with style and date options)
 
 The current implementation is still a scaffold for the PDF engine, packaging, and browser-specific release work.

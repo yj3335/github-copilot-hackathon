@@ -45,7 +45,7 @@ function PopupApp() {
     <main className="popup-shell">
       <section className="popup-card panel">
         <div>
-          <div className="eyebrow">Local-first PDF toolkit</div>
+          <div className="eyebrow">pdfsave</div>
           <h1 className="title">Edit privately.</h1>
         </div>
         <p className="muted">

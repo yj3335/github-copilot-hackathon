@@ -1,10 +1,8 @@
-# PDFSafe
-
-PDF Toolkit Platform
+# pdfsave
 
 Local-first PDF editing for teams that care about privacy, speed, and cross-browser access.
 
-PDF Toolkit Platform delivers a complete browser-extension workflow for day-to-day PDF operations while keeping files on-device, plus a landing and distribution surface for browser-specific installs.
+pdfsave delivers a complete browser-extension workflow for day-to-day PDF operations while keeping files on-device, plus a landing and distribution surface for browser-specific installs.
 
 ## Why This Project
 
@@ -109,7 +107,7 @@ npm run package:browsers --workspace @pdf-toolkit/extension
 
 ## What Is Next
 
-- Add watermark tooling to the contextual workspace toolbar.
-- Strengthen encrypted PDF support across all mutation paths.
-- Replace placeholder download URLs with Azure Blob Storage backed release artifacts.
-- Continue UX polish and production hardening across browsers.
+- Harden encrypted PDF support across all mutation paths.
+- Expand e-sign from text signatures to handwritten/image signature capture.
+- Finalize CDN-backed release artifact flow and update-feed automation.
+- Continue UX polish, broader test coverage, and cross-browser production hardening.

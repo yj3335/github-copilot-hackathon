@@ -26,7 +26,7 @@ test("download endpoint maps firefox package", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/download?browser=firefox`);
     const payload = await response.json();
     assert.equal(response.status, 200);
-    assert.match(payload.url, /firefox\/extension\.xpi$/);
+    assert.match(payload.url, /^\/packages\/local-pdf-toolkit-firefox-v0\.1\.0\.zip\?t=\d+$/);
   } finally {
     server.close();
   }

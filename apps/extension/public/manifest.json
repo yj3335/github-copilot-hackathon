@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Local PDF Toolkit",
+  "name": "pdfsave",
   "description": "Local-first PDF operations for Chrome, Edge, Firefox, and Safari-compatible WebExtensions.",
   "version": "0.1.0",
   "action": {
-    "default_title": "Local PDF Toolkit",
+    "default_title": "pdfsave",
     "default_popup": "popup.html"
   },
   "background": {
