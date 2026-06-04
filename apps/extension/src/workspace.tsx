@@ -5,6 +5,7 @@ import {
   compressPdf,
   type CompressionLevel,
   deletePdfPages,
+  removePassword,
   extractPdfPages,
   formatFileSize,
   getCanonicalPdfBaseName,
@@ -12,11 +13,16 @@ import {
   mergePdfFiles,
   parseSplitRangeInput,
   parsePageRangeInput,
+  reorderPdfPages,
   rotatePdfPages,
   splitPdfByRanges,
   splitPdfEveryNPages,
   splitPdfIntoEqualParts,
-  validatePdfFile
+  validatePdfFile,
+  watermarkPdf,
+  type TextWatermarkConfig,
+  type WatermarkPosition,
+  type WatermarkFont
 } from "../../../packages/pdf-core/src/index";
 
 GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("pdf.worker.mjs");
@@ -53,7 +59,7 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
-type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge" | "watermark" | "decrypt";
 type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
@@ -202,6 +208,14 @@ function WorkspaceApp() {
   const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>("balanced");
   const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
   const [splitValue, setSplitValue] = useState("");
+  const [watermarkText, setWatermarkText] = useState("DRAFT");
+  const [watermarkFontSize, setWatermarkFontSize] = useState(48);
+  const [watermarkColor, setWatermarkColor] = useState("#CC0000");
+  const [watermarkOpacity, setWatermarkOpacity] = useState(30);
+  const [watermarkRotation, setWatermarkRotation] = useState(45);
+  const [watermarkPosition, setWatermarkPosition] = useState<WatermarkPosition>("center");
+  const [watermarkFont, setWatermarkFont] = useState<WatermarkFont>("Helvetica");
+  const [decryptPassword, setDecryptPassword] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -388,7 +402,11 @@ function WorkspaceApp() {
             ? "Split"
             : activeTool === "compress"
               ? "Compress"
-              : "Merge";
+              : activeTool === "watermark"
+                ? "Watermark"
+                : activeTool === "decrypt"
+                  ? "Unlock"
+                  : "Merge";
 
   const activeToolDescription =
     activeTool === "extract"
@@ -401,7 +419,11 @@ function WorkspaceApp() {
             ? "Download a ZIP containing multiple PDFs based on your split settings."
             : activeTool === "compress"
               ? "Re-save the PDF with optimized object streams to reduce file size locally."
-              : "Choose multiple PDFs, order them, and download a merged document.";
+              : activeTool === "watermark"
+                ? "Add a text watermark to selected pages (or all pages if none selected)."
+                : activeTool === "decrypt"
+                  ? "Remove password protection and download an unlocked copy."
+                  : "Choose multiple PDFs, order them, and download a merged document.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -458,6 +480,16 @@ function WorkspaceApp() {
       return;
     }
 
+    if (activeTool === "watermark") {
+      await runWatermark();
+      return;
+    }
+
+    if (activeTool === "decrypt") {
+      await runDecrypt();
+      return;
+    }
+
     if (activeTool === "extract") {
       await runOperation("Extract");
       return;
@@ -475,6 +507,98 @@ function WorkspaceApp() {
     };
 
     await runOperation(rotationOperation[rotateAngle]);
+  };
+
+  const runWatermark = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before adding a watermark.");
+      return;
+    }
+
+    const targetPages = effectiveTargetPages.length > 0
+      ? effectiveTargetPages
+      : Array.from({ length: summary.pageCount }, (_, i) => i + 1);
+
+    if (!watermarkText.trim()) {
+      setNotice("Enter watermark text before applying.");
+      return;
+    }
+
+    setOperationProgress({ name: "Watermark", percent: 20 });
+    setNotice(null);
+
+    try {
+      pushUndoState(summary.file);
+      setOperationProgress({ name: "Watermark", percent: 50 });
+
+      const config: TextWatermarkConfig = {
+        type: "text",
+        text: watermarkText,
+        fontSize: watermarkFontSize,
+        color: watermarkColor,
+        opacity: watermarkOpacity,
+        rotation: watermarkRotation,
+        position: watermarkPosition,
+        font: watermarkFont,
+        pageNumbers: targetPages
+      };
+
+      const result = await watermarkPdf(summary.file, config);
+      setOperationProgress({ name: "Watermark", percent: 100 });
+      await applyMutatedDocument(result.bytes, result.filename);
+      setNotice(`Watermark applied to ${targetPages.length} pages.`);
+      setOperationHistory((current) => [
+        {
+          id: `Watermark-${Date.now()}`,
+          name: "Watermark",
+          pages: targetPages.join(", "),
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Watermark", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "Watermark operation failed.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
+  const runDecrypt = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before removing its password.");
+      return;
+    }
+
+    if (!decryptPassword.trim()) {
+      setNotice("Enter the document password to unlock.");
+      return;
+    }
+
+    setOperationProgress({ name: "Remove Password", percent: 20 });
+    setNotice(null);
+
+    try {
+      setOperationProgress({ name: "Remove Password", percent: 50 });
+      const result = await removePassword(summary.file, decryptPassword);
+      setOperationProgress({ name: "Remove Password", percent: 100 });
+      triggerDownload(result.bytes, result.filename);
+      setNotice("Password removed. Unlocked PDF download started.");
+      setOperationHistory((current) => [
+        {
+          id: `RemovePassword-${Date.now()}`,
+          name: "Remove Password",
+          pages: "All",
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Remove Password", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "Could not remove password.");
+    } finally {
+      setOperationProgress(null);
+    }
   };
 
   const applyMutatedDocument = async (bytes: Uint8Array, filename: string) => {
@@ -990,6 +1114,24 @@ function WorkspaceApp() {
             >
               Merge
             </button>
+            <button
+              aria-selected={activeTool === "watermark"}
+              className={`button secondary tool-tab${activeTool === "watermark" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("watermark")}
+              role="tab"
+              type="button"
+            >
+              Watermark
+            </button>
+            <button
+              aria-selected={activeTool === "decrypt"}
+              className={`button secondary tool-tab${activeTool === "decrypt" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("decrypt")}
+              role="tab"
+              type="button"
+            >
+              Unlock
+            </button>
           </div>
 
           <div className="tool-panel">
@@ -1122,6 +1264,74 @@ function WorkspaceApp() {
                 </div>
                 <div className="tool-summary">{compressionSummary}</div>
               </div>
+            ) : activeTool === "watermark" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="watermark-text">Text</label>
+                  <input
+                    id="watermark-text"
+                    maxLength={200}
+                    value={watermarkText}
+                    onChange={(e) => setWatermarkText(e.target.value)}
+                    placeholder="DRAFT"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-font">Font</label>
+                  <select id="watermark-font" value={watermarkFont} onChange={(e) => setWatermarkFont(e.target.value as WatermarkFont)}>
+                    <option value="Helvetica">Helvetica</option>
+                    <option value="Times">Times</option>
+                    <option value="Courier">Courier</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-size">Font size ({watermarkFontSize}pt)</label>
+                  <input id="watermark-size" type="range" min="8" max="144" value={watermarkFontSize} onChange={(e) => setWatermarkFontSize(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-color">Color</label>
+                  <input id="watermark-color" type="color" value={watermarkColor} onChange={(e) => setWatermarkColor(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-opacity">Opacity ({watermarkOpacity}%)</label>
+                  <input id="watermark-opacity" type="range" min="1" max="100" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-rotation">Rotation ({watermarkRotation}°)</label>
+                  <input id="watermark-rotation" type="range" min="0" max="359" value={watermarkRotation} onChange={(e) => setWatermarkRotation(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-position">Position</label>
+                  <select id="watermark-position" value={watermarkPosition} onChange={(e) => setWatermarkPosition(e.target.value as WatermarkPosition)}>
+                    <option value="center">Center</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                  </select>
+                </div>
+                <div className="tool-summary">
+                  {effectiveTargetPages.length > 0
+                    ? `Will apply to ${effectiveTargetPages.length} selected pages`
+                    : "Will apply to all pages (select specific pages to limit)"}
+                </div>
+              </div>
+            ) : activeTool === "decrypt" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="decrypt-password">Document password</label>
+                  <input
+                    id="decrypt-password"
+                    type="password"
+                    value={decryptPassword}
+                    onChange={(e) => setDecryptPassword(e.target.value)}
+                    placeholder="Enter PDF password"
+                  />
+                </div>
+                <div className="tool-summary">
+                  Removes permission restrictions (print, copy, edit). Works on owner-password-protected PDFs.
+                </div>
+              </div>
             ) : (
               <div className="tool-summary">{targetPageSummary}</div>
             )}
@@ -1138,7 +1348,11 @@ function WorkspaceApp() {
                         ? "Split and download ZIP"
                         : activeTool === "compress"
                           ? `Compress PDF (${compressionLevel})`
-                          : "Merge and download"}
+                          : activeTool === "watermark"
+                            ? "Apply watermark"
+                            : activeTool === "decrypt"
+                              ? "Remove password"
+                              : "Merge and download"}
               </button>
             </div>
 
