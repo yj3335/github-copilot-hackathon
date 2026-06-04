@@ -1,0 +1,21 @@
+{
+  "name": "@pdf-toolkit/extension",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pdf-toolkit/pdf-core": "workspace:*",
+    "pdfjs-dist": "^4.5.136",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.29",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "esbuild": "^0.25.5"
+  }
+}

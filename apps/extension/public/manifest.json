@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Local PDF Toolkit",
+  "description": "Local-first PDF operations for Chrome, Edge, Firefox, and Safari-compatible WebExtensions.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Local PDF Toolkit",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "settings.html",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "workspace.html",
+        "settings.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

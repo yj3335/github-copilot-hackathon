@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Toolkit Settings</title>
+    <link rel="stylesheet" href="styles/settings.css" />
+  </head>
+  <body>
+    <main class="settings-shell">
+      <p class="eyebrow">Settings</p>
+      <h1>Preferences</h1>
+
+      <label>
+        Output filename pattern
+        <input id="filename-pattern" type="text" maxlength="255" placeholder="{original}-{operation}-{date}" />
+      </label>
+
+      <label>
+        Workspace layout
+        <select id="layout-preference">
+          <option value="grid">Grid</option>
+          <option value="list">List</option>
+        </select>
+      </label>
+
+      <div class="actions">
+        <button id="save-settings" type="button">Save settings</button>
+        <button id="reset-settings" type="button">Reset to defaults</button>
+      </div>
+
+      <p id="settings-message" class="field-message" aria-live="polite"></p>
+    </main>
+    <script type="module" src="scripts/settings.js"></script>
+  </body>
+</html>

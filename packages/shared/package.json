@@ -1,0 +1,13 @@
+{
+  "name": "@pdf-toolkit/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "node -e \"console.log('shared package is source-only')\"",
+    "lint": "node -e \"console.log('shared package lint placeholder')\""
+  }
+}

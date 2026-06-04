@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Toolkit Workspace</title>
+    <link rel="stylesheet" href="styles/workspace.css" />
+  </head>
+  <body>
+    <div class="workspace-shell">
+      <header class="workspace-header">
+        <div>
+          <p class="eyebrow">Workspace</p>
+          <h1>Local PDF operations</h1>
+          <p id="document-summary">No document loaded.</p>
+        </div>
+        <div class="header-actions">
+          <label class="button-like">
+            Load PDF
+            <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden />
+          </label>
+          <button id="settings-link" type="button">Settings</button>
+        </div>
+      </header>
+
+      <section id="status-banner" class="status-banner" aria-live="polite"></section>
+
+      <section id="dropzone" class="dropzone" tabindex="0" aria-label="PDF drop zone">
+        <p>Drop a PDF here or choose a file to inspect it locally.</p>
+      </section>
+
+      <section class="operation-panel">
+        <div>
+          <label for="page-range">Page range</label>
+          <input id="page-range" type="text" placeholder="1-3, 5, 7-9" maxlength="500" />
+          <p id="page-range-message" class="field-message"></p>
+        </div>
+        <div class="operation-buttons">
+          <button type="button" data-op="extract">Extract</button>
+          <button type="button" data-op="delete">Delete</button>
+          <button type="button" data-op="rotate">Rotate 90°</button>
+        </div>
+      </section>
+
+      <section>
+        <div id="thumbnail-grid" class="thumbnail-grid" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <dialog id="preview-modal" class="preview-modal">
+      <form method="dialog">
+        <button type="submit" class="close-button" aria-label="Close preview">Close</button>
+      </form>
+      <div id="preview-content"></div>
+    </dialog>
+
+    <script type="module" src="scripts/workspace.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "landing-page-server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "build": "node -e \"console.log('landing page server is runtime-only')\"",
+    "lint": "node -e \"console.log('landing page lint placeholder')\"",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "@pdf-toolkit/shared": "0.1.0"
+  }
+}
