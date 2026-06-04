@@ -190,6 +190,7 @@ function WorkspaceApp() {
   const [launchIntent, setLaunchIntent] = useState<LaunchIntent>("idle");
   const [launchContext, setLaunchContext] = useState<string | null>(null);
   const [mergeCandidates, setMergeCandidates] = useState<File[]>([]);
+  const [draggedMergeIndex, setDraggedMergeIndex] = useState<number | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [lastSelectedPage, setLastSelectedPage] = useState<number | null>(null);
   const [previewThumbnail, setPreviewThumbnail] = useState<ThumbnailItem | null>(null);
@@ -724,6 +725,39 @@ function WorkspaceApp() {
     });
   };
 
+  const handleMergeCardDragStart = (index: number) => {
+    setDraggedMergeIndex(index);
+  };
+
+  const handleMergeCardDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+  };
+
+  const handleMergeCardDrop = (index: number) => {
+    if (draggedMergeIndex === null || draggedMergeIndex === index) {
+      setDraggedMergeIndex(null);
+      return;
+    }
+
+    setMergeCandidates((current) => {
+      if (draggedMergeIndex < 0 || draggedMergeIndex >= current.length || index < 0 || index >= current.length) {
+        return current;
+      }
+
+      const reordered = [...current];
+      const [movedFile] = reordered.splice(draggedMergeIndex, 1);
+      const targetIndex = draggedMergeIndex < index ? index - 1 : index;
+      reordered.splice(targetIndex, 0, movedFile);
+      return reordered;
+    });
+
+    setDraggedMergeIndex(null);
+  };
+
+  const handleMergeCardDragEnd = () => {
+    setDraggedMergeIndex(null);
+  };
+
   const runMerge = async () => {
     if (mergeCandidates.length < 2) {
       setNotice("Select at least two PDFs before running merge.");
@@ -1032,7 +1066,15 @@ function WorkspaceApp() {
                 {mergeCandidates.length > 0 ? (
                   <div className="merge-list">
                     {mergeCandidates.map((file, index) => (
-                      <article className="merge-card" key={`${file.name}-${index}`}>
+                      <article
+                        className={`merge-card${draggedMergeIndex === index ? " is-dragging" : ""}`}
+                        draggable
+                        key={`${file.name}-${index}`}
+                        onDragStart={() => handleMergeCardDragStart(index)}
+                        onDragOver={handleMergeCardDragOver}
+                        onDrop={() => handleMergeCardDrop(index)}
+                        onDragEnd={handleMergeCardDragEnd}
+                      >
                         <div className="merge-card-header">
                           <div>
                             <strong>{index + 1}. {file.name}</strong>
@@ -1059,6 +1101,7 @@ function WorkspaceApp() {
                             </button>
                           </div>
                         </div>
+                        <div className="muted merge-card-hint">Drag to reorder</div>
                       </article>
                     ))}
                   </div>
