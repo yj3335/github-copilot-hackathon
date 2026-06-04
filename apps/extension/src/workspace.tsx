@@ -123,10 +123,11 @@ async function renderThumbnailFromPdf(pdf: PdfPageReader, pageNumber: number): P
 async function renderAllThumbnails(
   file: File,
   pageCount: number,
-  onBatchRendered: (items: ThumbnailItem[]) => void
+  onBatchRendered: (items: ThumbnailItem[]) => void,
+  password?: string
 ) {
   const buffer = await file.arrayBuffer();
-  const pdf = await getDocument({ data: buffer }).promise;
+  const pdf = await getDocument({ data: buffer, password }).promise;
   const batchSize = 8;
 
   for (let start = 1; start <= pageCount; start += batchSize) {
@@ -138,9 +139,9 @@ async function renderAllThumbnails(
   }
 }
 
-async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
+async function loadPdfSummary(file: File, password?: string): Promise<LoadedPdfSummary> {
   const buffer = await file.arrayBuffer();
-  const documentTask = getDocument({ data: buffer });
+  const documentTask = getDocument({ data: buffer, password });
   const pdf = await documentTask.promise;
   const metadata = await pdf.getMetadata().catch(() => undefined);
   const info = metadata?.info as Record<string, string | undefined> | undefined;
@@ -153,6 +154,15 @@ async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
     modifiedAt: formatPdfDate(info?.ModDate),
     pageCount: pdf.numPages
   };
+}
+
+function isPdfPasswordError(error: unknown): error is { name?: string; code?: number } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { name?: string; code?: number };
+  return candidate.name === "PasswordException" || candidate.code === 1 || candidate.code === 2;
 }
 
 function triggerDownload(bytes: Uint8Array, filename: string, mimeType = "application/pdf") {
@@ -172,6 +182,7 @@ function WorkspaceApp() {
   const [summary, setSummary] = useState<LoadedPdfSummary | null>(null);
   const [thumbnails, setThumbnails] = useState<ThumbnailItem[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activePdfPassword, setActivePdfPassword] = useState<string | undefined>(undefined);
   const [rangeInput, setRangeInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [launchIntent, setLaunchIntent] = useState<LaunchIntent>("idle");
@@ -497,7 +508,7 @@ function WorkspaceApp() {
       setOperationProgress({ name, percent: 45 });
 
       if (name === "Extract") {
-        const result = await extractPdfPages(summary.file, targetPages);
+        const result = await extractPdfPages(summary.file, targetPages, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         triggerDownload(result.bytes, result.filename || `${baseName}-extract.pdf`);
         setNotice(`Extracted ${result.pageCount} pages and started the download.`);
@@ -512,7 +523,7 @@ function WorkspaceApp() {
         }
 
         pushUndoState(summary.file);
-        const result = await deletePdfPages(summary.file, targetPages);
+        const result = await deletePdfPages(summary.file, targetPages, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-delete.pdf`);
         setNotice(`Deleted ${targetPages.length} pages and refreshed the workspace.`);
@@ -520,7 +531,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 90°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 90);
+        const result = await rotatePdfPages(summary.file, targetPages, 90, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-90.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -528,7 +539,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 180°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 180);
+        const result = await rotatePdfPages(summary.file, targetPages, 180, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-180.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -536,7 +547,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 270°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 270);
+        const result = await rotatePdfPages(summary.file, targetPages, 270, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-270.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -579,8 +590,33 @@ function WorkspaceApp() {
         }
       }
 
-      const pdfSummary = await loadPdfSummary(file);
+      let resolvedPassword: string | undefined;
+      let pdfSummary: LoadedPdfSummary | null = null;
+
+      while (!pdfSummary) {
+        try {
+          pdfSummary = await loadPdfSummary(file, resolvedPassword);
+        } catch (error) {
+          if (!isPdfPasswordError(error)) {
+            throw error;
+          }
+
+          const promptLabel = resolvedPassword
+            ? "Incorrect password. Enter the PDF password to continue:"
+            : "This PDF is password protected. Enter the password to continue:";
+          const enteredPassword = window.prompt(promptLabel, "") ?? null;
+
+          if (enteredPassword === null) {
+            setNotice("Password entry cancelled. The PDF was not loaded.");
+            return;
+          }
+
+          resolvedPassword = enteredPassword;
+        }
+      }
+
       setSummary(pdfSummary);
+      setActivePdfPassword(resolvedPassword);
       setThumbnails([]);
       setSelectedPages([]);
       setLastSelectedPage(null);
@@ -588,7 +624,7 @@ function WorkspaceApp() {
 
       await renderAllThumbnails(file, pdfSummary.pageCount, (batchItems) => {
         setThumbnails((current) => [...current, ...batchItems]);
-      });
+      }, resolvedPassword);
     } catch (error) {
       console.error("load_failed", { timestamp: new Date().toISOString(), error });
       setNotice("The selected PDF could not be processed locally. Check that the file is a valid PDF.");
@@ -614,16 +650,18 @@ function WorkspaceApp() {
       }
 
       setMergeCandidates(selectedFiles);
+      setActivePdfPassword(undefined);
       setSummary(null);
       setThumbnails([]);
       setSelectedPages([]);
       setLastSelectedPage(null);
       setPreviewThumbnail(null);
-      setNotice(`Merge staging ready for ${selectedFiles.length} PDFs. Wire this list into the merge engine next.`);
+      setNotice(`Merge staging ready for ${selectedFiles.length} PDFs. Reorder the list if needed, then run Merge and download.`);
       return;
     }
 
     setMergeCandidates([]);
+    setActivePdfPassword(undefined);
     await processFile(selectedFiles[0]);
   };
 
@@ -697,15 +735,15 @@ function WorkspaceApp() {
           return;
         }
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfByRanges(summary.file, splitValue);
+        result = await splitPdfByRanges(summary.file, splitValue, { password: activePdfPassword });
       } else if (splitMode === "equal-parts") {
         const partCount = Number(splitValue);
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfIntoEqualParts(summary.file, partCount);
+        result = await splitPdfIntoEqualParts(summary.file, partCount, { password: activePdfPassword });
       } else {
         const segmentSize = Number(splitValue);
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfEveryNPages(summary.file, segmentSize);
+        result = await splitPdfEveryNPages(summary.file, segmentSize, { password: activePdfPassword });
       }
 
       setOperationProgress({ name: "Split", percent: 100 });
@@ -934,7 +972,7 @@ function WorkspaceApp() {
               <div className="eyebrow">Merge staging</div>
               <h2>Ready to order {mergeCandidates.length} files</h2>
               <p className="muted">
-                This shell now captures the popup merge intent and validates the file-size cap locally. The merge engine and drag reordering flow can build on this staged list.
+                Reorder your staged PDFs to control merge order, then run a local merge and download the combined file.
               </p>
               <div className="merge-toolbar">
                 <button className="button" onClick={() => void runMerge()} type="button">
@@ -1049,7 +1087,7 @@ function WorkspaceApp() {
               <div className="eyebrow">Ready</div>
               <h2>Open a local PDF to begin.</h2>
               <p className="muted">
-                This shell is set up for local file validation, metadata parsing, and thumbnail rendering as the foundation for extract, split, merge, reorder, and rotate flows.
+                Local processing is enabled for extract, delete, rotate, split, and merge workflows with no upload required.
               </p>
             </div>
           )}

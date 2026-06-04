@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "package:browsers": "npm run build && node scripts/package.mjs",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
