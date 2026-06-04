@@ -42,6 +42,8 @@ export interface PdfLoadOptions {
   password?: string;
 }
 
+export type CompressionLevel = "balanced" | "maximum";
+
 export const MAX_INPUT_FILE_BYTES = 200 * 1024 * 1024;
 export const PAGE_RANGE_PATTERN = /^[\d,\-\s]+$/;
 
@@ -220,6 +222,46 @@ export async function mergePdfFiles(files: File[]): Promise<PdfMutationResult> {
     bytes,
     filename: buildFilename(firstFile, "merged"),
     pageCount: output.getPageCount()
+  };
+}
+
+export async function compressPdf(
+  file: File,
+  level: CompressionLevel,
+  options?: PdfLoadOptions
+): Promise<PdfMutationResult> {
+  const source = await loadPdfDocument(file, options);
+
+  if (level === "maximum") {
+    const output = await PDFDocument.create();
+    const pageIndexes = Array.from({ length: source.getPageCount() }, (_, index) => index);
+    const copiedPages = await output.copyPages(source, pageIndexes);
+
+    for (const page of copiedPages) {
+      output.addPage(page);
+    }
+
+    const bytes = await output.save({
+      useObjectStreams: true,
+      updateFieldAppearances: false
+    });
+
+    return {
+      bytes,
+      filename: buildFilename(file, "compress-max"),
+      pageCount: output.getPageCount()
+    };
+  }
+
+  const bytes = await source.save({
+    useObjectStreams: true,
+    updateFieldAppearances: false
+  });
+
+  return {
+    bytes,
+    filename: buildFilename(file, "compress"),
+    pageCount: source.getPageCount()
   };
 }
 

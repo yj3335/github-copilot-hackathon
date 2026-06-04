@@ -2,6 +2,8 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import {
+  compressPdf,
+  type CompressionLevel,
   deletePdfPages,
   extractPdfPages,
   formatFileSize,
@@ -51,7 +53,7 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
-type ToolMode = "extract" | "delete" | "rotate" | "split";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress";
 type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
@@ -196,6 +198,7 @@ function WorkspaceApp() {
   const [undoStack, setUndoStack] = useState<File[]>([]);
   const [activeTool, setActiveTool] = useState<ToolMode>("extract");
   const [rotateAngle, setRotateAngle] = useState<RotateAngle>(90);
+  const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>("balanced");
   const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
   const [splitValue, setSplitValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -355,6 +358,16 @@ function WorkspaceApp() {
       : `A new PDF will be created every ${splitValue} pages.`;
   }, [parsedSplitRanges.invalidEntries, parsedSplitRanges.ranges.length, parsedSplitRanges.valid, splitMode, splitValue, summary]);
 
+  const compressionSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to prepare compression output.";
+    }
+
+    return compressionLevel === "balanced"
+      ? "Balanced keeps document fidelity while reducing container overhead."
+      : "Maximum rewrites pages into a fresh document for stronger size reduction.";
+  }, [compressionLevel, summary]);
+
   const activeToolTitle =
     activeTool === "extract"
       ? "Extract"
@@ -362,7 +375,9 @@ function WorkspaceApp() {
         ? "Delete"
         : activeTool === "rotate"
           ? "Rotate"
-          : "Split";
+          : activeTool === "split"
+            ? "Split"
+            : "Compress";
 
   const activeToolDescription =
     activeTool === "extract"
@@ -371,7 +386,9 @@ function WorkspaceApp() {
         ? "Remove the targeted pages and keep the rest of the document."
         : activeTool === "rotate"
           ? "Rotate the targeted pages in place and refresh the working document."
-          : "Download a ZIP containing multiple PDFs based on your split settings.";
+          : activeTool === "split"
+            ? "Download a ZIP containing multiple PDFs based on your split settings."
+            : "Re-save the PDF with optimized object streams to reduce file size locally.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -415,6 +432,11 @@ function WorkspaceApp() {
   const runActiveTool = async () => {
     if (activeTool === "split") {
       await runSplit();
+      return;
+    }
+
+    if (activeTool === "compress") {
+      await runCompress();
       return;
     }
 
@@ -766,6 +788,51 @@ function WorkspaceApp() {
     }
   };
 
+  const runCompress = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before running compression.");
+      return;
+    }
+
+    setOperationProgress({ name: "Compress", percent: 20 });
+    setNotice(null);
+
+    try {
+      const originalSize = summary.file.size;
+      setOperationProgress({ name: "Compress", percent: 55 });
+      const result = await compressPdf(summary.file, compressionLevel, { password: activePdfPassword });
+      setOperationProgress({ name: "Compress", percent: 100 });
+
+      const compressedSize = result.bytes.length;
+      const savedBytes = Math.max(0, originalSize - compressedSize);
+      const percentSaved = originalSize > 0 ? (savedBytes / originalSize) * 100 : 0;
+
+      pushUndoState(summary.file);
+      await applyMutatedDocument(result.bytes, result.filename);
+
+      setOperationHistory((current) => [
+        {
+          id: `Compress-${Date.now()}`,
+          name: "Compress",
+          pages: `${compressionLevel} (${formatFileSize(originalSize)} -> ${formatFileSize(compressedSize)})`,
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+
+      setNotice(
+        savedBytes > 0
+          ? `Compression complete: saved ${formatFileSize(savedBytes)} (${percentSaved.toFixed(1)}%).`
+          : "Compression complete. No size reduction was detected for this file."
+      );
+    } catch (error) {
+      console.error("operation_failed", { operation: "Compress", timestamp: new Date().toISOString(), error });
+      setNotice("The compression operation could not be completed locally.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
   return (
     <main className="workspace-shell">
       <div className="workspace-layout">
@@ -853,6 +920,15 @@ function WorkspaceApp() {
             >
               Split
             </button>
+            <button
+              aria-selected={activeTool === "compress"}
+              className={`button secondary tool-tab${activeTool === "compress" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("compress")}
+              role="tab"
+              type="button"
+            >
+              Compress
+            </button>
           </div>
 
           <div className="tool-panel">
@@ -912,6 +988,21 @@ function WorkspaceApp() {
                 </div>
                 <div className="tool-summary">{splitSummary}</div>
               </div>
+            ) : activeTool === "compress" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="compression-level">Compression level</label>
+                  <select
+                    id="compression-level"
+                    value={compressionLevel}
+                    onChange={(event) => setCompressionLevel(event.target.value as CompressionLevel)}
+                  >
+                    <option value="balanced">Balanced</option>
+                    <option value="maximum">Maximum</option>
+                  </select>
+                </div>
+                <div className="tool-summary">{compressionSummary}</div>
+              </div>
             ) : (
               <div className="tool-summary">{targetPageSummary}</div>
             )}
@@ -924,7 +1015,9 @@ function WorkspaceApp() {
                     ? "Delete selected pages"
                     : activeTool === "rotate"
                       ? `Rotate selected pages ${rotateAngle}°`
-                      : "Split and download ZIP"}
+                      : activeTool === "split"
+                        ? "Split and download ZIP"
+                        : `Compress PDF (${compressionLevel})`}
               </button>
             </div>
 
