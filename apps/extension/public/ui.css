@@ -176,6 +176,14 @@ a {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(31, 26, 22, 0.08);
+  cursor: grab;
+}
+
+.merge-card.is-dragging {
+  opacity: 0.65;
+  cursor: grabbing;
+  border-color: rgba(188, 75, 44, 0.42);
+  box-shadow: 0 0 0 3px rgba(188, 75, 44, 0.12);
 }
 
 .merge-card-header {
@@ -188,6 +196,11 @@ a {
 .merge-card-actions {
   display: flex;
   gap: 8px;
+}
+
+.merge-card-hint {
+  margin-top: 8px;
+  font-size: 0.82rem;
 }
 
 .thumbnail-card {

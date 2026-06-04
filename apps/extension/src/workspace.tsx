@@ -5,6 +5,7 @@ import {
   compressPdf,
   type CompressionLevel,
   deletePdfPages,
+  removePassword,
   extractPdfPages,
   formatFileSize,
   getCanonicalPdfBaseName,
@@ -12,11 +13,16 @@ import {
   mergePdfFiles,
   parseSplitRangeInput,
   parsePageRangeInput,
+  reorderPdfPages,
   rotatePdfPages,
   splitPdfByRanges,
   splitPdfEveryNPages,
   splitPdfIntoEqualParts,
-  validatePdfFile
+  validatePdfFile,
+  watermarkPdf,
+  type TextWatermarkConfig,
+  type WatermarkPosition,
+  type WatermarkFont
 } from "../../../packages/pdf-core/src/index";
 
 GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("pdf.worker.mjs");
@@ -53,7 +59,7 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
-type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge" | "watermark" | "decrypt";
 type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
@@ -190,6 +196,7 @@ function WorkspaceApp() {
   const [launchIntent, setLaunchIntent] = useState<LaunchIntent>("idle");
   const [launchContext, setLaunchContext] = useState<string | null>(null);
   const [mergeCandidates, setMergeCandidates] = useState<File[]>([]);
+  const [draggedMergeIndex, setDraggedMergeIndex] = useState<number | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [lastSelectedPage, setLastSelectedPage] = useState<number | null>(null);
   const [previewThumbnail, setPreviewThumbnail] = useState<ThumbnailItem | null>(null);
@@ -201,6 +208,14 @@ function WorkspaceApp() {
   const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>("balanced");
   const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
   const [splitValue, setSplitValue] = useState("");
+  const [watermarkText, setWatermarkText] = useState("DRAFT");
+  const [watermarkFontSize, setWatermarkFontSize] = useState(48);
+  const [watermarkColor, setWatermarkColor] = useState("#CC0000");
+  const [watermarkOpacity, setWatermarkOpacity] = useState(30);
+  const [watermarkRotation, setWatermarkRotation] = useState(45);
+  const [watermarkPosition, setWatermarkPosition] = useState<WatermarkPosition>("center");
+  const [watermarkFont, setWatermarkFont] = useState<WatermarkFont>("Helvetica");
+  const [decryptPassword, setDecryptPassword] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -368,6 +383,14 @@ function WorkspaceApp() {
       : "Maximum rewrites pages into a fresh document for stronger size reduction.";
   }, [compressionLevel, summary]);
 
+  const mergeSummary = useMemo(() => {
+    if (mergeCandidates.length === 0) {
+      return "Choose two or more PDFs to stage a local merge.";
+    }
+
+    return `${mergeCandidates.length} file${mergeCandidates.length === 1 ? "" : "s"} staged for merge. Reorder them below before downloading.`;
+  }, [mergeCandidates.length]);
+
   const activeToolTitle =
     activeTool === "extract"
       ? "Extract"
@@ -377,7 +400,13 @@ function WorkspaceApp() {
           ? "Rotate"
           : activeTool === "split"
             ? "Split"
-            : "Compress";
+            : activeTool === "compress"
+              ? "Compress"
+              : activeTool === "watermark"
+                ? "Watermark"
+                : activeTool === "decrypt"
+                  ? "Unlock"
+                  : "Merge";
 
   const activeToolDescription =
     activeTool === "extract"
@@ -388,7 +417,13 @@ function WorkspaceApp() {
           ? "Rotate the targeted pages in place and refresh the working document."
           : activeTool === "split"
             ? "Download a ZIP containing multiple PDFs based on your split settings."
-            : "Re-save the PDF with optimized object streams to reduce file size locally.";
+            : activeTool === "compress"
+              ? "Re-save the PDF with optimized object streams to reduce file size locally."
+              : activeTool === "watermark"
+                ? "Add a text watermark to selected pages (or all pages if none selected)."
+                : activeTool === "decrypt"
+                  ? "Remove password protection and download an unlocked copy."
+                  : "Choose multiple PDFs, order them, and download a merged document.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -435,8 +470,23 @@ function WorkspaceApp() {
       return;
     }
 
+    if (activeTool === "merge") {
+      await runMerge();
+      return;
+    }
+
     if (activeTool === "compress") {
       await runCompress();
+      return;
+    }
+
+    if (activeTool === "watermark") {
+      await runWatermark();
+      return;
+    }
+
+    if (activeTool === "decrypt") {
+      await runDecrypt();
       return;
     }
 
@@ -457,6 +507,98 @@ function WorkspaceApp() {
     };
 
     await runOperation(rotationOperation[rotateAngle]);
+  };
+
+  const runWatermark = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before adding a watermark.");
+      return;
+    }
+
+    const targetPages = effectiveTargetPages.length > 0
+      ? effectiveTargetPages
+      : Array.from({ length: summary.pageCount }, (_, i) => i + 1);
+
+    if (!watermarkText.trim()) {
+      setNotice("Enter watermark text before applying.");
+      return;
+    }
+
+    setOperationProgress({ name: "Watermark", percent: 20 });
+    setNotice(null);
+
+    try {
+      pushUndoState(summary.file);
+      setOperationProgress({ name: "Watermark", percent: 50 });
+
+      const config: TextWatermarkConfig = {
+        type: "text",
+        text: watermarkText,
+        fontSize: watermarkFontSize,
+        color: watermarkColor,
+        opacity: watermarkOpacity,
+        rotation: watermarkRotation,
+        position: watermarkPosition,
+        font: watermarkFont,
+        pageNumbers: targetPages
+      };
+
+      const result = await watermarkPdf(summary.file, config);
+      setOperationProgress({ name: "Watermark", percent: 100 });
+      await applyMutatedDocument(result.bytes, result.filename);
+      setNotice(`Watermark applied to ${targetPages.length} pages.`);
+      setOperationHistory((current) => [
+        {
+          id: `Watermark-${Date.now()}`,
+          name: "Watermark",
+          pages: targetPages.join(", "),
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Watermark", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "Watermark operation failed.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
+  const runDecrypt = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before removing its password.");
+      return;
+    }
+
+    if (!decryptPassword.trim()) {
+      setNotice("Enter the document password to unlock.");
+      return;
+    }
+
+    setOperationProgress({ name: "Remove Password", percent: 20 });
+    setNotice(null);
+
+    try {
+      setOperationProgress({ name: "Remove Password", percent: 50 });
+      const result = await removePassword(summary.file, decryptPassword);
+      setOperationProgress({ name: "Remove Password", percent: 100 });
+      triggerDownload(result.bytes, result.filename);
+      setNotice("Password removed. Unlocked PDF download started.");
+      setOperationHistory((current) => [
+        {
+          id: `RemovePassword-${Date.now()}`,
+          name: "Remove Password",
+          pages: "All",
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "Remove Password", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "Could not remove password.");
+    } finally {
+      setOperationProgress(null);
+    }
   };
 
   const applyMutatedDocument = async (bytes: Uint8Array, filename: string) => {
@@ -664,7 +806,7 @@ function WorkspaceApp() {
 
     setLaunchContext(null);
 
-    if (launchIntent === "merge") {
+    if (launchIntent === "merge" || activeTool === "merge") {
       const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > 500 * 1024 * 1024) {
         setNotice("Selected merge files exceed the 500 MB limit. Reduce the selection and try again.");
@@ -673,6 +815,7 @@ function WorkspaceApp() {
 
       setMergeCandidates(selectedFiles);
       setActivePdfPassword(undefined);
+      setActiveTool("merge");
       setSummary(null);
       setThumbnails([]);
       setSelectedPages([]);
@@ -704,6 +847,39 @@ function WorkspaceApp() {
       reordered.splice(nextIndex, 0, movedFile);
       return reordered;
     });
+  };
+
+  const handleMergeCardDragStart = (index: number) => {
+    setDraggedMergeIndex(index);
+  };
+
+  const handleMergeCardDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+  };
+
+  const handleMergeCardDrop = (index: number) => {
+    if (draggedMergeIndex === null || draggedMergeIndex === index) {
+      setDraggedMergeIndex(null);
+      return;
+    }
+
+    setMergeCandidates((current) => {
+      if (draggedMergeIndex < 0 || draggedMergeIndex >= current.length || index < 0 || index >= current.length) {
+        return current;
+      }
+
+      const reordered = [...current];
+      const [movedFile] = reordered.splice(draggedMergeIndex, 1);
+      const targetIndex = draggedMergeIndex < index ? index - 1 : index;
+      reordered.splice(targetIndex, 0, movedFile);
+      return reordered;
+    });
+
+    setDraggedMergeIndex(null);
+  };
+
+  const handleMergeCardDragEnd = () => {
+    setDraggedMergeIndex(null);
   };
 
   const runMerge = async () => {
@@ -849,14 +1025,14 @@ function WorkspaceApp() {
               {launchIntent === "merge" ? "or choose multiple PDFs from disk" : "or choose a file from disk"}
             </p>
             <button className="button" onClick={() => fileInputRef.current?.click()} type="button">
-              {launchIntent === "merge" ? "Select PDFs" : "Select PDF"}
+              {launchIntent === "merge" || activeTool === "merge" ? "Select PDFs" : "Select PDF"}
             </button>
             <input
               accept="application/pdf,.pdf"
               hidden
               ref={fileInputRef}
               type="file"
-              multiple={launchIntent === "merge"}
+              multiple={launchIntent === "merge" || activeTool === "merge"}
               onChange={(event) => {
                 void handleFiles(event.target.files);
               }}
@@ -929,6 +1105,33 @@ function WorkspaceApp() {
             >
               Compress
             </button>
+            <button
+              aria-selected={activeTool === "merge"}
+              className={`button secondary tool-tab${activeTool === "merge" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("merge")}
+              role="tab"
+              type="button"
+            >
+              Merge
+            </button>
+            <button
+              aria-selected={activeTool === "watermark"}
+              className={`button secondary tool-tab${activeTool === "watermark" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("watermark")}
+              role="tab"
+              type="button"
+            >
+              Watermark
+            </button>
+            <button
+              aria-selected={activeTool === "decrypt"}
+              className={`button secondary tool-tab${activeTool === "decrypt" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("decrypt")}
+              role="tab"
+              type="button"
+            >
+              Unlock
+            </button>
           </div>
 
           <div className="tool-panel">
@@ -988,6 +1191,64 @@ function WorkspaceApp() {
                 </div>
                 <div className="tool-summary">{splitSummary}</div>
               </div>
+            ) : activeTool === "merge" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="merge-stage">Merge staging</label>
+                  <input
+                    id="merge-stage"
+                    readOnly
+                    value={mergeCandidates.length > 0 ? `${mergeCandidates.length} files staged` : "No files staged yet"}
+                  />
+                </div>
+                <div className="tool-summary">{mergeSummary}</div>
+                <button className="button secondary" onClick={() => fileInputRef.current?.click()} type="button">
+                  Select PDFs to merge
+                </button>
+                {mergeCandidates.length > 0 ? (
+                  <div className="merge-list">
+                    {mergeCandidates.map((file, index) => (
+                      <article
+                        className={`merge-card${draggedMergeIndex === index ? " is-dragging" : ""}`}
+                        draggable
+                        key={`${file.name}-${index}`}
+                        onDragStart={() => handleMergeCardDragStart(index)}
+                        onDragOver={handleMergeCardDragOver}
+                        onDrop={() => handleMergeCardDrop(index)}
+                        onDragEnd={handleMergeCardDragEnd}
+                      >
+                        <div className="merge-card-header">
+                          <div>
+                            <strong>{index + 1}. {file.name}</strong>
+                            <div className="muted">{formatFileSize(file.size)}</div>
+                          </div>
+                          <div className="merge-card-actions">
+                            <button
+                              aria-label={`Move ${file.name} up`}
+                              className="button secondary"
+                              disabled={index === 0}
+                              onClick={() => moveMergeCandidate(index, -1)}
+                              type="button"
+                            >
+                              Up
+                            </button>
+                            <button
+                              aria-label={`Move ${file.name} down`}
+                              className="button secondary"
+                              disabled={index === mergeCandidates.length - 1}
+                              onClick={() => moveMergeCandidate(index, 1)}
+                              type="button"
+                            >
+                              Down
+                            </button>
+                          </div>
+                        </div>
+                        <div className="muted merge-card-hint">Drag to reorder</div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ) : activeTool === "compress" ? (
               <div className="split-panel">
                 <div className="field">
@@ -1003,6 +1264,74 @@ function WorkspaceApp() {
                 </div>
                 <div className="tool-summary">{compressionSummary}</div>
               </div>
+            ) : activeTool === "watermark" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="watermark-text">Text</label>
+                  <input
+                    id="watermark-text"
+                    maxLength={200}
+                    value={watermarkText}
+                    onChange={(e) => setWatermarkText(e.target.value)}
+                    placeholder="DRAFT"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-font">Font</label>
+                  <select id="watermark-font" value={watermarkFont} onChange={(e) => setWatermarkFont(e.target.value as WatermarkFont)}>
+                    <option value="Helvetica">Helvetica</option>
+                    <option value="Times">Times</option>
+                    <option value="Courier">Courier</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-size">Font size ({watermarkFontSize}pt)</label>
+                  <input id="watermark-size" type="range" min="8" max="144" value={watermarkFontSize} onChange={(e) => setWatermarkFontSize(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-color">Color</label>
+                  <input id="watermark-color" type="color" value={watermarkColor} onChange={(e) => setWatermarkColor(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-opacity">Opacity ({watermarkOpacity}%)</label>
+                  <input id="watermark-opacity" type="range" min="1" max="100" value={watermarkOpacity} onChange={(e) => setWatermarkOpacity(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-rotation">Rotation ({watermarkRotation}°)</label>
+                  <input id="watermark-rotation" type="range" min="0" max="359" value={watermarkRotation} onChange={(e) => setWatermarkRotation(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="watermark-position">Position</label>
+                  <select id="watermark-position" value={watermarkPosition} onChange={(e) => setWatermarkPosition(e.target.value as WatermarkPosition)}>
+                    <option value="center">Center</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                  </select>
+                </div>
+                <div className="tool-summary">
+                  {effectiveTargetPages.length > 0
+                    ? `Will apply to ${effectiveTargetPages.length} selected pages`
+                    : "Will apply to all pages (select specific pages to limit)"}
+                </div>
+              </div>
+            ) : activeTool === "decrypt" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="decrypt-password">Document password</label>
+                  <input
+                    id="decrypt-password"
+                    type="password"
+                    value={decryptPassword}
+                    onChange={(e) => setDecryptPassword(e.target.value)}
+                    placeholder="Enter PDF password"
+                  />
+                </div>
+                <div className="tool-summary">
+                  Removes permission restrictions (print, copy, edit). Works on owner-password-protected PDFs.
+                </div>
+              </div>
             ) : (
               <div className="tool-summary">{targetPageSummary}</div>
             )}
@@ -1017,7 +1346,13 @@ function WorkspaceApp() {
                       ? `Rotate selected pages ${rotateAngle}°`
                       : activeTool === "split"
                         ? "Split and download ZIP"
-                        : `Compress PDF (${compressionLevel})`}
+                        : activeTool === "compress"
+                          ? `Compress PDF (${compressionLevel})`
+                          : activeTool === "watermark"
+                            ? "Apply watermark"
+                            : activeTool === "decrypt"
+                              ? "Remove password"
+                              : "Merge and download"}
               </button>
             </div>
 
@@ -1060,7 +1395,7 @@ function WorkspaceApp() {
             </div>
           ) : null}
 
-          {mergeCandidates.length > 0 ? (
+          {mergeCandidates.length > 0 && activeTool !== "merge" ? (
             <>
               <div className="eyebrow">Merge staging</div>
               <h2>Ready to order {mergeCandidates.length} files</h2>
