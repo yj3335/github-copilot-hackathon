@@ -13,7 +13,7 @@ export function createApp() {
 
   app.disable("x-powered-by");
   app.use(express.static(publicDir, {
-    maxAge: "24h",
+    maxAge: 0,
     extensions: ["html"]
   }));
 
@@ -43,7 +43,8 @@ export function createApp() {
       packagePath = `/packages/local-pdf-toolkit-chrome-v0.1.0.zip`;
     }
 
-    response.json({ url: packagePath });
+    // Append timestamp to bypass aggressive browser cache
+    response.json({ url: `${packagePath}?t=${Date.now()}` });
   });
 
   // Using direct Blob Storage URL since Azure Front Door is blocked on Free/Student subscriptions
