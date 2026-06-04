@@ -6,7 +6,9 @@ const browsers = [
 ];
 
 const primaryButton = document.querySelector("#primary-download");
-const alternateDownloads = document.querySelector("#alternate-downloads");
+const revealTargets = Array.from(
+  document.querySelectorAll(".hero, .section, .card, .app-shell, .footer")
+);
 
 async function fetchBrowser() {
   const response = await fetch("/api/browser");
@@ -29,36 +31,51 @@ async function handleDownload(browser) {
   window.location.href = payload.url;
 }
 
-function renderAlternates(primaryBrowser) {
-  alternateDownloads.replaceChildren();
-
-  for (const entry of browsers.filter((item) => item.browser !== primaryBrowser)) {
-    const button = document.createElement("button");
-    button.className = "secondary-action";
-    button.type = "button";
-    button.textContent = `Download for ${entry.label}`;
-    button.addEventListener("click", () => handleDownload(entry.browser));
-    alternateDownloads.append(button);
-  }
-}
-
 fetchBrowser()
   .then((detected) => {
     const primary = browsers.find((item) => item.browser === detected.browser);
 
     if (!primary) {
-      primaryButton.textContent = "Choose your browser";
-      primaryButton.disabled = true;
-      renderAlternates("");
+      primaryButton.textContent = "Download extension";
+      primaryButton.addEventListener("click", () => handleDownload(""));
       return;
     }
 
     primaryButton.textContent = `Download for ${primary.label}`;
     primaryButton.addEventListener("click", () => handleDownload(primary.browser));
-    renderAlternates(primary.browser);
   })
   .catch(() => {
-    primaryButton.textContent = "Choose your browser";
-    primaryButton.disabled = true;
-    renderAlternates("");
+    primaryButton.textContent = "Download extension";
+    primaryButton.addEventListener("click", () => handleDownload(""));
   });
+
+if (revealTargets.length > 0) {
+  const viewportHeight = window.innerHeight || 0;
+  revealTargets.forEach((element, index) => {
+    element.classList.add("reveal");
+    element.style.setProperty("--reveal-delay", `${index * 80}ms`);
+    if (element.getBoundingClientRect().top < viewportHeight * 0.9) {
+      element.classList.add("is-visible");
+    }
+  });
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (!prefersReducedMotion && "IntersectionObserver" in window) {
+    const observer = new IntersectionObserver(
+      (entries, current) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            current.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.15 }
+    );
+
+    revealTargets.forEach((element) => observer.observe(element));
+  } else {
+    revealTargets.forEach((element) => element.classList.add("is-visible"));
+  }
+}
