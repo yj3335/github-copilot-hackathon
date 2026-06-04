@@ -25,6 +25,20 @@ interface ThumbnailItem {
   height: number;
 }
 
+type LaunchIntent = "idle" | "open" | "merge";
+
+interface OperationProgress {
+  name: string;
+  percent: number;
+}
+
+interface OperationHistoryEntry {
+  id: string;
+  name: string;
+  pages: string;
+  timestamp: string;
+}
+
 async function renderThumbnail(file: File, pageNumber: number): Promise<ThumbnailItem> {
   const buffer = await file.arrayBuffer();
   const pdf = await getDocument({ data: buffer }).promise;
@@ -74,6 +88,14 @@ function WorkspaceApp() {
   const [notice, setNotice] = useState<string | null>(null);
   const [rangeInput, setRangeInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [launchIntent, setLaunchIntent] = useState<LaunchIntent>("idle");
+  const [launchContext, setLaunchContext] = useState<string | null>(null);
+  const [mergeCandidates, setMergeCandidates] = useState<File[]>([]);
+  const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [lastSelectedPage, setLastSelectedPage] = useState<number | null>(null);
+  const [previewThumbnail, setPreviewThumbnail] = useState<ThumbnailItem | null>(null);
+  const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
+  const [operationHistory, setOperationHistory] = useState<OperationHistoryEntry[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -86,12 +108,163 @@ function WorkspaceApp() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const intent = params.get("intent");
+
+    if (intent === "open") {
+      setLaunchIntent("open");
+      setLaunchContext(params.get("name") || "PDF selected from popup");
+      queueMicrotask(() => {
+        fileInputRef.current?.click();
+      });
+      return;
+    }
+
+    if (intent === "merge") {
+      setLaunchIntent("merge");
+      const count = params.get("count");
+      const names = params.get("names");
+      setLaunchContext(
+        count && names
+          ? `Popup selected ${count} PDFs. Re-select them here to begin merge staging: ${names}`
+          : "Re-select PDF files here to begin merge staging."
+      );
+      queueMicrotask(() => {
+        fileInputRef.current?.click();
+      });
+      return;
+    }
+
+    setLaunchIntent("idle");
+    setLaunchContext(null);
+  }, []);
+
   const parsedRange = useMemo(() => {
     if (!summary) {
       return { valid: true, pages: [], invalidEntries: [] };
     }
     return parsePageRangeInput(rangeInput, summary.pageCount);
   }, [rangeInput, summary]);
+
+  useEffect(() => {
+    if (!previewThumbnail) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewThumbnail(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [previewThumbnail]);
+
+  const renderedPageNumbers = useMemo(
+    () => thumbnails.map((thumbnail) => thumbnail.pageNumber).sort((left, right) => left - right),
+    [thumbnails]
+  );
+
+  const selectedPageSet = useMemo(() => new Set(selectedPages), [selectedPages]);
+
+  const selectedRangeSummary = useMemo(() => {
+    if (selectedPages.length === 0) {
+      return "";
+    }
+
+    return [...selectedPages].sort((left, right) => left - right).join(", ");
+  }, [selectedPages]);
+
+  const handleThumbnailSelection = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    pageNumber: number
+  ) => {
+    if (event.shiftKey && lastSelectedPage !== null) {
+      const start = Math.min(lastSelectedPage, pageNumber);
+      const end = Math.max(lastSelectedPage, pageNumber);
+      const rangeSelection = renderedPageNumbers.filter((page) => page >= start && page <= end);
+      setSelectedPages(rangeSelection);
+      return;
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      setSelectedPages((current) => {
+        const next = new Set(current);
+        if (next.has(pageNumber)) {
+          next.delete(pageNumber);
+        } else {
+          next.add(pageNumber);
+        }
+        return [...next].sort((left, right) => left - right);
+      });
+      setLastSelectedPage(pageNumber);
+      return;
+    }
+
+    setSelectedPages([pageNumber]);
+    setLastSelectedPage(pageNumber);
+  };
+
+  const openPreview = (pageNumber: number) => {
+    const thumbnail = thumbnails.find((entry) => entry.pageNumber === pageNumber) || null;
+    setPreviewThumbnail(thumbnail);
+  };
+
+  const getTargetPages = () => {
+    if (parsedRange.pages.length > 0) {
+      return parsedRange.pages;
+    }
+
+    return selectedPages;
+  };
+
+  const stageOperation = (name: string) => {
+    if (!summary) {
+      setNotice("Load a PDF before staging an operation.");
+      return;
+    }
+
+    if (!parsedRange.valid) {
+      setNotice("Fix the invalid page range before staging an operation.");
+      return;
+    }
+
+    const targetPages = getTargetPages();
+    if (targetPages.length === 0) {
+      setNotice("Select pages or enter a page range before staging an operation.");
+      return;
+    }
+
+    const progressSteps = [20, 45, 70, 100];
+    let currentStep = 0;
+    setOperationProgress({ name, percent: progressSteps[0] });
+
+    const timer = window.setInterval(() => {
+      currentStep += 1;
+
+      if (currentStep >= progressSteps.length) {
+        window.clearInterval(timer);
+        setOperationProgress(null);
+        setNotice(`${name} staged for pages ${targetPages.join(", ")}. Connect this to the PDF worker next.`);
+        setOperationHistory((current) => [
+          {
+            id: `${name}-${Date.now()}`,
+            name,
+            pages: targetPages.join(", "),
+            timestamp: new Date().toLocaleTimeString()
+          },
+          ...current
+        ].slice(0, 10));
+        return;
+      }
+
+      setOperationProgress({ name, percent: progressSteps[currentStep] });
+    }, 140);
+  };
 
   const processFile = async (file: File) => {
     setLoading(true);
@@ -115,6 +288,9 @@ function WorkspaceApp() {
 
       const pdfSummary = await loadPdfSummary(file);
       setSummary(pdfSummary);
+      setSelectedPages([]);
+      setLastSelectedPage(null);
+      setPreviewThumbnail(null);
 
       const previewPages = Array.from(
         { length: Math.min(pdfSummary.pageCount, 12) },
@@ -131,16 +307,50 @@ function WorkspaceApp() {
   };
 
   const handleFiles = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) {
+    const selectedFiles = Array.from(files ?? []);
+
+    if (selectedFiles.length === 0) {
       return;
     }
-    await processFile(file);
+
+    if (launchIntent === "merge") {
+      const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+      if (totalBytes > 500 * 1024 * 1024) {
+        setNotice("Selected merge files exceed the 500 MB limit. Reduce the selection and try again.");
+        return;
+      }
+
+      setMergeCandidates(selectedFiles);
+      setSummary(null);
+      setThumbnails([]);
+      setSelectedPages([]);
+      setLastSelectedPage(null);
+      setPreviewThumbnail(null);
+      setNotice(`Merge staging ready for ${selectedFiles.length} PDFs. Wire this list into the merge engine next.`);
+      return;
+    }
+
+    setMergeCandidates([]);
+    await processFile(selectedFiles[0]);
   };
 
   const onDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     await handleFiles(event.dataTransfer.files);
+  };
+
+  const moveMergeCandidate = (index: number, direction: -1 | 1) => {
+    setMergeCandidates((current) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+
+      const reordered = [...current];
+      const [movedFile] = reordered.splice(index, 1);
+      reordered.splice(nextIndex, 0, movedFile);
+      return reordered;
+    });
   };
 
   return (
@@ -152,17 +362,21 @@ function WorkspaceApp() {
           <p className="muted">
             Load a PDF from disk, inspect document metadata, and stage page-range driven operations without any upload.
           </p>
+          {launchContext ? <div className="notice">{launchContext}</div> : null}
           <div className="dropzone" onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             <p><strong>Drop a PDF here</strong></p>
-            <p className="muted">or choose a file from disk</p>
+            <p className="muted">
+              {launchIntent === "merge" ? "or choose multiple PDFs from disk" : "or choose a file from disk"}
+            </p>
             <button className="button" onClick={() => fileInputRef.current?.click()} type="button">
-              Select PDF
+              {launchIntent === "merge" ? "Select PDFs" : "Select PDF"}
             </button>
             <input
               accept="application/pdf,.pdf"
               hidden
               ref={fileInputRef}
               type="file"
+              multiple={launchIntent === "merge"}
               onChange={(event) => {
                 void handleFiles(event.target.files);
               }}
@@ -179,8 +393,24 @@ function WorkspaceApp() {
             />
           </div>
 
+          <div className="operation-actions">
+            <button className="button" onClick={() => stageOperation("Extract")} type="button">
+              Extract
+            </button>
+            <button className="button secondary" onClick={() => stageOperation("Delete")} type="button">
+              Delete
+            </button>
+            <button className="button secondary" onClick={() => stageOperation("Rotate 90°")} type="button">
+              Rotate 90°
+            </button>
+          </div>
+
           {summary && parsedRange.pages.length > 0 ? (
             <div className="tag">{parsedRange.pages.length} pages selected from range input</div>
+          ) : null}
+
+          {selectedPages.length > 0 ? (
+            <div className="tag">Selected pages: {selectedRangeSummary}</div>
           ) : null}
 
           {!parsedRange.valid ? (
@@ -192,6 +422,59 @@ function WorkspaceApp() {
 
         <section className="content panel">
           {loading ? <div className="tag">Loading PDF…</div> : null}
+          {operationProgress ? (
+            <div className="progress-panel">
+              <div className="progress-header">
+                <strong>{operationProgress.name}</strong>
+                <span>{operationProgress.percent}%</span>
+              </div>
+              <div aria-hidden="true" className="progress-track">
+                <div className="progress-bar" style={{ width: `${operationProgress.percent}%` }} />
+              </div>
+            </div>
+          ) : null}
+
+          {mergeCandidates.length > 0 ? (
+            <>
+              <div className="eyebrow">Merge staging</div>
+              <h2>Ready to order {mergeCandidates.length} files</h2>
+              <p className="muted">
+                This shell now captures the popup merge intent and validates the file-size cap locally. The merge engine and drag reordering flow can build on this staged list.
+              </p>
+              <div className="merge-list">
+                {mergeCandidates.map((file, index) => (
+                  <article className="merge-card" key={`${file.name}-${index}`}>
+                    <div className="merge-card-header">
+                      <div>
+                        <strong>{index + 1}. {file.name}</strong>
+                        <div className="muted">{formatFileSize(file.size)}</div>
+                      </div>
+                      <div className="merge-card-actions">
+                        <button
+                          aria-label={`Move ${file.name} up`}
+                          className="button secondary"
+                          disabled={index === 0}
+                          onClick={() => moveMergeCandidate(index, -1)}
+                          type="button"
+                        >
+                          Up
+                        </button>
+                        <button
+                          aria-label={`Move ${file.name} down`}
+                          className="button secondary"
+                          disabled={index === mergeCandidates.length - 1}
+                          onClick={() => moveMergeCandidate(index, 1)}
+                          type="button"
+                        >
+                          Down
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : null}
 
           {summary ? (
             <>
@@ -228,14 +511,38 @@ function WorkspaceApp() {
 
               <div className="thumbnail-grid">
                 {thumbnails.map((thumbnail) => (
-                  <article className="thumbnail-card" key={thumbnail.pageNumber}>
+                  <button
+                    aria-label={`Preview page ${thumbnail.pageNumber}`}
+                    aria-pressed={selectedPageSet.has(thumbnail.pageNumber)}
+                    className="thumbnail-card"
+                    data-selected={selectedPageSet.has(thumbnail.pageNumber) ? "true" : "false"}
+                    key={thumbnail.pageNumber}
+                    onClick={(event) => handleThumbnailSelection(event, thumbnail.pageNumber)}
+                    onDoubleClick={() => openPreview(thumbnail.pageNumber)}
+                    type="button"
+                  >
                     <div className="thumbnail-frame">
                       <img alt={`Page ${thumbnail.pageNumber} preview`} src={thumbnail.src} />
                     </div>
                     <p>Page {thumbnail.pageNumber}</p>
-                  </article>
+                  </button>
                 ))}
               </div>
+
+              {operationHistory.length > 0 ? (
+                <div className="history-panel">
+                  <div className="eyebrow">Operation history</div>
+                  <div className="history-list">
+                    {operationHistory.map((entry) => (
+                      <article className="history-card" key={entry.id}>
+                        <strong>{entry.name}</strong>
+                        <div className="muted">Pages {entry.pages}</div>
+                        <div className="muted">{entry.timestamp}</div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </>
           ) : (
             <div>
@@ -248,6 +555,30 @@ function WorkspaceApp() {
           )}
         </section>
       </div>
+
+      {previewThumbnail ? (
+        <div
+          aria-modal="true"
+          className="preview-overlay"
+          onClick={() => setPreviewThumbnail(null)}
+          role="dialog"
+        >
+          <div className="preview-panel panel" onClick={(event) => event.stopPropagation()}>
+            <div className="preview-header">
+              <div>
+                <div className="eyebrow">Preview</div>
+                <h2>Page {previewThumbnail.pageNumber}</h2>
+              </div>
+              <button className="button secondary" onClick={() => setPreviewThumbnail(null)} type="button">
+                Close
+              </button>
+            </div>
+            <div className="preview-image-frame">
+              <img alt={`Full preview for page ${previewThumbnail.pageNumber}`} src={previewThumbnail.src} />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

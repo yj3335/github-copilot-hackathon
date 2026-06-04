@@ -1,8 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { useRef } from "react";
 
-function openExtensionPage(page: "workspace" | "settings") {
-  const target = chrome.runtime.getURL(`${page}.html`);
+function openExtensionPage(page: "workspace" | "settings", query = "") {
+  const target = chrome.runtime.getURL(`${page}.html${query}`);
   chrome.tabs.create({ url: target });
 }
 
@@ -24,10 +24,8 @@ function PopupApp() {
       return;
     }
 
-    chrome.storage.session.set({ launchMode: "single", stagedFiles: [file.name] }, () => {
-      openExtensionPage("workspace");
-      window.close();
-    });
+    openExtensionPage("workspace", `?intent=open&name=${encodeURIComponent(file.name)}`);
+    window.close();
   };
 
   const handleMergeFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -36,16 +34,11 @@ function PopupApp() {
       return;
     }
 
-    chrome.storage.session.set(
-      {
-        launchMode: "merge",
-        stagedFiles: files.map((file) => file.name)
-      },
-      () => {
-        openExtensionPage("workspace");
-        window.close();
-      }
+    openExtensionPage(
+      "workspace",
+      `?intent=merge&count=${files.length}&names=${encodeURIComponent(files.map((file) => file.name).join(", "))}`
     );
+    window.close();
   };
 
   return (
@@ -69,7 +62,12 @@ function PopupApp() {
             Open Workspace
           </button>
         </div>
-        <div className="muted">Version 0.1.0 · <a href="#" onClick={() => openExtensionPage("settings")}>Settings</a></div>
+        <div className="muted">
+          Version 0.1.0 · {" "}
+          <button className="text-button" onClick={() => openExtensionPage("settings")} type="button">
+            Settings
+          </button>
+        </div>
         <input accept="application/pdf,.pdf" hidden ref={fileInputRef} type="file" onChange={handleSingleFileChange} />
         <input accept="application/pdf,.pdf" hidden multiple ref={mergeInputRef} type="file" onChange={handleMergeFileChange} />
       </section>

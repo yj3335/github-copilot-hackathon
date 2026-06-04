@@ -27,3 +27,4 @@ await build({
 });
 
 await cp(resolve(rootDir, "public"), distDir, { recursive: true });
+await cp(resolve(rootDir, "../../node_modules/pdfjs-dist/build/pdf.worker.mjs"), resolve(distDir, "pdf.worker.mjs"));
