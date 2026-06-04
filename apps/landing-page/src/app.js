@@ -12,6 +12,17 @@ export function createApp() {
   const app = express();
 
   app.disable("x-powered-by");
+
+  // Prevent caching for HTML and critical assets to ensure immediate updates
+  app.use((request, response, next) => {
+    if (request.path === "/" || request.path.endsWith(".html")) {
+      response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      response.setHeader("Pragma", "no-cache");
+      response.setHeader("Expires", "0");
+    }
+    next();
+  });
+
   app.use(express.static(publicDir, {
     maxAge: 0,
     extensions: ["html"]
