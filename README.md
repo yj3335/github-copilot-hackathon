@@ -1,4 +1,6 @@
-# PDF Toolkit Platform
+# PDFSafe
+
+PDF Toolkit Platform
 
 Local-first PDF editing for teams that care about privacy, speed, and cross-browser access.
 
