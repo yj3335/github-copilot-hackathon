@@ -32,7 +32,7 @@ test("download endpoint maps firefox package", async () => {
   }
 });
 
-test("landing page renders PRIVAPDF scaffold", async () => {
+test("landing page renders PDFsafe scaffold", async () => {
   const app = createApp();
   const server = app.listen(0);
   const { port } = server.address();
@@ -41,8 +41,11 @@ test("landing page renders PRIVAPDF scaffold", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/`);
     const html = await response.text();
     assert.equal(response.status, 200);
-    assert.match(html, /PRIVAPDF/);
-    assert.match(html, /Cross-browser, local-first PDF toolkit platform\./);
+    assert.match(
+      html,
+      /Local-first PDF editing for teams that care about privacy, speed, and cross-browser access\./
+    );
+    assert.match(html, /pdfsafe_logo\.png/);
     assert.match(html, /Download extension/);
   } finally {
     server.close();

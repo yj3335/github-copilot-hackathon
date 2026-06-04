@@ -2,6 +2,8 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import {
+  compressPdf,
+  type CompressionLevel,
   deletePdfPages,
   extractPdfPages,
   formatFileSize,
@@ -11,7 +13,6 @@ import {
   parseSplitRangeInput,
   parsePageRangeInput,
   rotatePdfPages,
-  sanitizeFilename,
   splitPdfByRanges,
   splitPdfEveryNPages,
   splitPdfIntoEqualParts,
@@ -52,6 +53,8 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge";
+type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
   getPage(pageNumber: number): Promise<{
@@ -122,10 +125,11 @@ async function renderThumbnailFromPdf(pdf: PdfPageReader, pageNumber: number): P
 async function renderAllThumbnails(
   file: File,
   pageCount: number,
-  onBatchRendered: (items: ThumbnailItem[]) => void
+  onBatchRendered: (items: ThumbnailItem[]) => void,
+  password?: string
 ) {
   const buffer = await file.arrayBuffer();
-  const pdf = await getDocument({ data: buffer }).promise;
+  const pdf = await getDocument({ data: buffer, password }).promise;
   const batchSize = 8;
 
   for (let start = 1; start <= pageCount; start += batchSize) {
@@ -137,9 +141,9 @@ async function renderAllThumbnails(
   }
 }
 
-async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
+async function loadPdfSummary(file: File, password?: string): Promise<LoadedPdfSummary> {
   const buffer = await file.arrayBuffer();
-  const documentTask = getDocument({ data: buffer });
+  const documentTask = getDocument({ data: buffer, password });
   const pdf = await documentTask.promise;
   const metadata = await pdf.getMetadata().catch(() => undefined);
   const info = metadata?.info as Record<string, string | undefined> | undefined;
@@ -152,6 +156,15 @@ async function loadPdfSummary(file: File): Promise<LoadedPdfSummary> {
     modifiedAt: formatPdfDate(info?.ModDate),
     pageCount: pdf.numPages
   };
+}
+
+function isPdfPasswordError(error: unknown): error is { name?: string; code?: number } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { name?: string; code?: number };
+  return candidate.name === "PasswordException" || candidate.code === 1 || candidate.code === 2;
 }
 
 function triggerDownload(bytes: Uint8Array, filename: string, mimeType = "application/pdf") {
@@ -171,17 +184,22 @@ function WorkspaceApp() {
   const [summary, setSummary] = useState<LoadedPdfSummary | null>(null);
   const [thumbnails, setThumbnails] = useState<ThumbnailItem[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activePdfPassword, setActivePdfPassword] = useState<string | undefined>(undefined);
   const [rangeInput, setRangeInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [launchIntent, setLaunchIntent] = useState<LaunchIntent>("idle");
   const [launchContext, setLaunchContext] = useState<string | null>(null);
   const [mergeCandidates, setMergeCandidates] = useState<File[]>([]);
+  const [draggedMergeIndex, setDraggedMergeIndex] = useState<number | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [lastSelectedPage, setLastSelectedPage] = useState<number | null>(null);
   const [previewThumbnail, setPreviewThumbnail] = useState<ThumbnailItem | null>(null);
   const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
   const [operationHistory, setOperationHistory] = useState<OperationHistoryEntry[]>([]);
   const [undoStack, setUndoStack] = useState<File[]>([]);
+  const [activeTool, setActiveTool] = useState<ToolMode>("extract");
+  const [rotateAngle, setRotateAngle] = useState<RotateAngle>(90);
+  const [compressionLevel, setCompressionLevel] = useState<CompressionLevel>("balanced");
   const [splitMode, setSplitMode] = useState<SplitMode>("ranges");
   const [splitValue, setSplitValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -289,6 +307,11 @@ function WorkspaceApp() {
   );
 
   const selectedPageSet = useMemo(() => new Set(selectedPages), [selectedPages]);
+  const effectiveTargetPages = useMemo(
+    () => (parsedRange.pages.length > 0 ? parsedRange.pages : selectedPages),
+    [parsedRange.pages, selectedPages]
+  );
+  const pageSelectionSource = parsedRange.pages.length > 0 ? "range" : "thumbnails";
 
   const selectedRangeSummary = useMemo(() => {
     if (selectedPages.length === 0) {
@@ -297,6 +320,88 @@ function WorkspaceApp() {
 
     return [...selectedPages].sort((left, right) => left - right).join(", ");
   }, [selectedPages]);
+
+  const targetPageSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to target pages.";
+    }
+
+    if (effectiveTargetPages.length === 0) {
+      return "No pages targeted yet. Select thumbnails or enter a page range.";
+    }
+
+    return `${effectiveTargetPages.length} page${effectiveTargetPages.length === 1 ? "" : "s"} targeted from ${pageSelectionSource}: ${effectiveTargetPages.join(", ")}`;
+  }, [effectiveTargetPages, pageSelectionSource, summary]);
+
+  const splitSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to configure split output.";
+    }
+
+    if (!splitValue.trim()) {
+      return splitMode === "ranges"
+        ? "Enter split ranges like 1-3, 4-6, 7-9."
+        : splitMode === "equal-parts"
+          ? "Choose how many equal parts to create."
+          : "Choose how many pages each split should contain.";
+    }
+
+    if (splitMode === "ranges") {
+      if (!parsedSplitRanges.valid) {
+        return `Invalid split ranges: ${parsedSplitRanges.invalidEntries.join(", ")}`;
+      }
+
+      return `${parsedSplitRanges.ranges.length} split group${parsedSplitRanges.ranges.length === 1 ? "" : "s"} configured.`;
+    }
+
+    return splitMode === "equal-parts"
+      ? `Document will be divided into ${splitValue} parts.`
+      : `A new PDF will be created every ${splitValue} pages.`;
+  }, [parsedSplitRanges.invalidEntries, parsedSplitRanges.ranges.length, parsedSplitRanges.valid, splitMode, splitValue, summary]);
+
+  const compressionSummary = useMemo(() => {
+    if (!summary) {
+      return "Load a PDF to prepare compression output.";
+    }
+
+    return compressionLevel === "balanced"
+      ? "Balanced keeps document fidelity while reducing container overhead."
+      : "Maximum rewrites pages into a fresh document for stronger size reduction.";
+  }, [compressionLevel, summary]);
+
+  const mergeSummary = useMemo(() => {
+    if (mergeCandidates.length === 0) {
+      return "Choose two or more PDFs to stage a local merge.";
+    }
+
+    return `${mergeCandidates.length} file${mergeCandidates.length === 1 ? "" : "s"} staged for merge. Reorder them below before downloading.`;
+  }, [mergeCandidates.length]);
+
+  const activeToolTitle =
+    activeTool === "extract"
+      ? "Extract"
+      : activeTool === "delete"
+        ? "Delete"
+        : activeTool === "rotate"
+          ? "Rotate"
+          : activeTool === "split"
+            ? "Split"
+            : activeTool === "compress"
+              ? "Compress"
+              : "Merge";
+
+  const activeToolDescription =
+    activeTool === "extract"
+      ? "Create a new PDF from the pages currently targeted."
+      : activeTool === "delete"
+        ? "Remove the targeted pages and keep the rest of the document."
+        : activeTool === "rotate"
+          ? "Rotate the targeted pages in place and refresh the working document."
+          : activeTool === "split"
+            ? "Download a ZIP containing multiple PDFs based on your split settings."
+            : activeTool === "compress"
+              ? "Re-save the PDF with optimized object streams to reduce file size locally."
+              : "Choose multiple PDFs, order them, and download a merged document.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -334,11 +439,42 @@ function WorkspaceApp() {
   };
 
   const getTargetPages = () => {
-    if (parsedRange.pages.length > 0) {
-      return parsedRange.pages;
+    return effectiveTargetPages;
+  };
+
+  const runActiveTool = async () => {
+    if (activeTool === "split") {
+      await runSplit();
+      return;
     }
 
-    return selectedPages;
+    if (activeTool === "merge") {
+      await runMerge();
+      return;
+    }
+
+    if (activeTool === "compress") {
+      await runCompress();
+      return;
+    }
+
+    if (activeTool === "extract") {
+      await runOperation("Extract");
+      return;
+    }
+
+    if (activeTool === "delete") {
+      await runOperation("Delete");
+      return;
+    }
+
+    const rotationOperation: Record<RotateAngle, ExecutableOperation> = {
+      90: "Rotate 90°",
+      180: "Rotate 180°",
+      270: "Rotate 270°"
+    };
+
+    await runOperation(rotationOperation[rotateAngle]);
   };
 
   const applyMutatedDocument = async (bytes: Uint8Array, filename: string) => {
@@ -412,7 +548,7 @@ function WorkspaceApp() {
       setOperationProgress({ name, percent: 45 });
 
       if (name === "Extract") {
-        const result = await extractPdfPages(summary.file, targetPages);
+        const result = await extractPdfPages(summary.file, targetPages, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         triggerDownload(result.bytes, result.filename || `${baseName}-extract.pdf`);
         setNotice(`Extracted ${result.pageCount} pages and started the download.`);
@@ -427,7 +563,7 @@ function WorkspaceApp() {
         }
 
         pushUndoState(summary.file);
-        const result = await deletePdfPages(summary.file, targetPages);
+        const result = await deletePdfPages(summary.file, targetPages, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-delete.pdf`);
         setNotice(`Deleted ${targetPages.length} pages and refreshed the workspace.`);
@@ -435,7 +571,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 90°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 90);
+        const result = await rotatePdfPages(summary.file, targetPages, 90, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-90.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -443,7 +579,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 180°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 180);
+        const result = await rotatePdfPages(summary.file, targetPages, 180, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-180.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -451,7 +587,7 @@ function WorkspaceApp() {
 
       if (name === "Rotate 270°") {
         pushUndoState(summary.file);
-        const result = await rotatePdfPages(summary.file, targetPages, 270);
+        const result = await rotatePdfPages(summary.file, targetPages, 270, { password: activePdfPassword });
         setOperationProgress({ name, percent: 100 });
         await applyMutatedDocument(result.bytes, result.filename || `${baseName}-rotate-270.pdf`);
         setNotice(`Rotated pages ${targetPages.join(", ")} and refreshed the workspace.`);
@@ -494,8 +630,33 @@ function WorkspaceApp() {
         }
       }
 
-      const pdfSummary = await loadPdfSummary(file);
+      let resolvedPassword: string | undefined;
+      let pdfSummary: LoadedPdfSummary | null = null;
+
+      while (!pdfSummary) {
+        try {
+          pdfSummary = await loadPdfSummary(file, resolvedPassword);
+        } catch (error) {
+          if (!isPdfPasswordError(error)) {
+            throw error;
+          }
+
+          const promptLabel = resolvedPassword
+            ? "Incorrect password. Enter the PDF password to continue:"
+            : "This PDF is password protected. Enter the password to continue:";
+          const enteredPassword = window.prompt(promptLabel, "") ?? null;
+
+          if (enteredPassword === null) {
+            setNotice("Password entry cancelled. The PDF was not loaded.");
+            return;
+          }
+
+          resolvedPassword = enteredPassword;
+        }
+      }
+
       setSummary(pdfSummary);
+      setActivePdfPassword(resolvedPassword);
       setThumbnails([]);
       setSelectedPages([]);
       setLastSelectedPage(null);
@@ -503,7 +664,7 @@ function WorkspaceApp() {
 
       await renderAllThumbnails(file, pdfSummary.pageCount, (batchItems) => {
         setThumbnails((current) => [...current, ...batchItems]);
-      });
+      }, resolvedPassword);
     } catch (error) {
       console.error("load_failed", { timestamp: new Date().toISOString(), error });
       setNotice("The selected PDF could not be processed locally. Check that the file is a valid PDF.");
@@ -519,7 +680,9 @@ function WorkspaceApp() {
       return;
     }
 
-    if (launchIntent === "merge") {
+    setLaunchContext(null);
+
+    if (launchIntent === "merge" || activeTool === "merge") {
       const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > 500 * 1024 * 1024) {
         setNotice("Selected merge files exceed the 500 MB limit. Reduce the selection and try again.");
@@ -527,16 +690,19 @@ function WorkspaceApp() {
       }
 
       setMergeCandidates(selectedFiles);
+      setActivePdfPassword(undefined);
+      setActiveTool("merge");
       setSummary(null);
       setThumbnails([]);
       setSelectedPages([]);
       setLastSelectedPage(null);
       setPreviewThumbnail(null);
-      setNotice(`Merge staging ready for ${selectedFiles.length} PDFs. Wire this list into the merge engine next.`);
+      setNotice(`Merge staging ready for ${selectedFiles.length} PDFs. Reorder the list if needed, then run Merge and download.`);
       return;
     }
 
     setMergeCandidates([]);
+    setActivePdfPassword(undefined);
     await processFile(selectedFiles[0]);
   };
 
@@ -557,6 +723,39 @@ function WorkspaceApp() {
       reordered.splice(nextIndex, 0, movedFile);
       return reordered;
     });
+  };
+
+  const handleMergeCardDragStart = (index: number) => {
+    setDraggedMergeIndex(index);
+  };
+
+  const handleMergeCardDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+  };
+
+  const handleMergeCardDrop = (index: number) => {
+    if (draggedMergeIndex === null || draggedMergeIndex === index) {
+      setDraggedMergeIndex(null);
+      return;
+    }
+
+    setMergeCandidates((current) => {
+      if (draggedMergeIndex < 0 || draggedMergeIndex >= current.length || index < 0 || index >= current.length) {
+        return current;
+      }
+
+      const reordered = [...current];
+      const [movedFile] = reordered.splice(draggedMergeIndex, 1);
+      const targetIndex = draggedMergeIndex < index ? index - 1 : index;
+      reordered.splice(targetIndex, 0, movedFile);
+      return reordered;
+    });
+
+    setDraggedMergeIndex(null);
+  };
+
+  const handleMergeCardDragEnd = () => {
+    setDraggedMergeIndex(null);
   };
 
   const runMerge = async () => {
@@ -610,15 +809,15 @@ function WorkspaceApp() {
           return;
         }
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfByRanges(summary.file, splitValue);
+        result = await splitPdfByRanges(summary.file, splitValue, { password: activePdfPassword });
       } else if (splitMode === "equal-parts") {
         const partCount = Number(splitValue);
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfIntoEqualParts(summary.file, partCount);
+        result = await splitPdfIntoEqualParts(summary.file, partCount, { password: activePdfPassword });
       } else {
         const segmentSize = Number(splitValue);
         setOperationProgress({ name: "Split", percent: 50 });
-        result = await splitPdfEveryNPages(summary.file, segmentSize);
+        result = await splitPdfEveryNPages(summary.file, segmentSize, { password: activePdfPassword });
       }
 
       setOperationProgress({ name: "Split", percent: 100 });
@@ -641,6 +840,51 @@ function WorkspaceApp() {
     }
   };
 
+  const runCompress = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before running compression.");
+      return;
+    }
+
+    setOperationProgress({ name: "Compress", percent: 20 });
+    setNotice(null);
+
+    try {
+      const originalSize = summary.file.size;
+      setOperationProgress({ name: "Compress", percent: 55 });
+      const result = await compressPdf(summary.file, compressionLevel, { password: activePdfPassword });
+      setOperationProgress({ name: "Compress", percent: 100 });
+
+      const compressedSize = result.bytes.length;
+      const savedBytes = Math.max(0, originalSize - compressedSize);
+      const percentSaved = originalSize > 0 ? (savedBytes / originalSize) * 100 : 0;
+
+      pushUndoState(summary.file);
+      await applyMutatedDocument(result.bytes, result.filename);
+
+      setOperationHistory((current) => [
+        {
+          id: `Compress-${Date.now()}`,
+          name: "Compress",
+          pages: `${compressionLevel} (${formatFileSize(originalSize)} -> ${formatFileSize(compressedSize)})`,
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+
+      setNotice(
+        savedBytes > 0
+          ? `Compression complete: saved ${formatFileSize(savedBytes)} (${percentSaved.toFixed(1)}%).`
+          : "Compression complete. No size reduction was detected for this file."
+      );
+    } catch (error) {
+      console.error("operation_failed", { operation: "Compress", timestamp: new Date().toISOString(), error });
+      setNotice("The compression operation could not be completed locally.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
   return (
     <main className="workspace-shell">
       <div className="workspace-layout">
@@ -657,19 +901,29 @@ function WorkspaceApp() {
               {launchIntent === "merge" ? "or choose multiple PDFs from disk" : "or choose a file from disk"}
             </p>
             <button className="button" onClick={() => fileInputRef.current?.click()} type="button">
-              {launchIntent === "merge" ? "Select PDFs" : "Select PDF"}
+              {launchIntent === "merge" || activeTool === "merge" ? "Select PDFs" : "Select PDF"}
             </button>
             <input
               accept="application/pdf,.pdf"
               hidden
               ref={fileInputRef}
               type="file"
-              multiple={launchIntent === "merge"}
+              multiple={launchIntent === "merge" || activeTool === "merge"}
               onChange={(event) => {
                 void handleFiles(event.target.files);
               }}
             />
           </div>
+
+          {summary ? (
+            <div className="loaded-file-card panel-subtle">
+              <div className="eyebrow">Current file</div>
+              <strong>{summary.file.name}</strong>
+              <div className="muted">
+                {summary.pageCount} pages · {formatFileSize(summary.file.size)}
+              </div>
+            </div>
+          ) : null}
 
           <div className="field">
             <label htmlFor="page-range">Page range</label>
@@ -681,55 +935,225 @@ function WorkspaceApp() {
             />
           </div>
 
-          <div className="split-panel">
-            <div className="eyebrow">Split</div>
-            <div className="field">
-              <label htmlFor="split-mode">Split mode</label>
-              <select id="split-mode" value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)}>
-                <option value="ranges">By ranges</option>
-                <option value="equal-parts">Equal parts</option>
-                <option value="every-n-pages">Every N pages</option>
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="split-value">
-                {splitMode === "ranges" ? "Ranges" : splitMode === "equal-parts" ? "Number of parts" : "Pages per split"}
-              </label>
-              <input
-                id="split-value"
-                inputMode={splitMode === "ranges" ? "text" : "numeric"}
-                placeholder={
-                  splitMode === "ranges"
-                    ? "1-3, 4-6, 7-10"
-                    : splitMode === "equal-parts"
-                      ? "3"
-                      : "5"
-                }
-                value={splitValue}
-                onChange={(event) => setSplitValue(event.target.value)}
-              />
-            </div>
-            <button className="button secondary" onClick={() => void runSplit()} type="button">
-              Split and download ZIP
+          <div className="tool-toolbar" role="tablist" aria-label="PDF tools">
+            <button
+              aria-selected={activeTool === "extract"}
+              className={`button secondary tool-tab${activeTool === "extract" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("extract")}
+              role="tab"
+              type="button"
+            >
+              Extract
+            </button>
+            <button
+              aria-selected={activeTool === "delete"}
+              className={`button secondary tool-tab${activeTool === "delete" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("delete")}
+              role="tab"
+              type="button"
+            >
+              Delete
+            </button>
+            <button
+              aria-selected={activeTool === "rotate"}
+              className={`button secondary tool-tab${activeTool === "rotate" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("rotate")}
+              role="tab"
+              type="button"
+            >
+              Rotate
+            </button>
+            <button
+              aria-selected={activeTool === "split"}
+              className={`button secondary tool-tab${activeTool === "split" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("split")}
+              role="tab"
+              type="button"
+            >
+              Split
+            </button>
+            <button
+              aria-selected={activeTool === "compress"}
+              className={`button secondary tool-tab${activeTool === "compress" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("compress")}
+              role="tab"
+              type="button"
+            >
+              Compress
+            </button>
+            <button
+              aria-selected={activeTool === "merge"}
+              className={`button secondary tool-tab${activeTool === "merge" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("merge")}
+              role="tab"
+              type="button"
+            >
+              Merge
             </button>
           </div>
 
-          <div className="operation-actions">
-            <button className="button secondary" onClick={() => void runOperation("Extract")} type="button">
-              Extract
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Delete")} type="button">
-              Delete
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 90°")} type="button">
-              Rotate 90°
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 180°")} type="button">
-              Rotate 180°
-            </button>
-            <button className="button secondary" onClick={() => void runOperation("Rotate 270°")} type="button">
-              Rotate 270°
-            </button>
+          <div className="tool-panel">
+            <div className="eyebrow">Active tool</div>
+            <div className="tool-panel-header">
+              <strong>{activeToolTitle}</strong>
+              <span className="tag">{activeTool === "split" ? "ZIP output" : "PDF output"}</span>
+            </div>
+            <p className="muted tool-description">{activeToolDescription}</p>
+
+            {activeTool === "rotate" ? (
+              <div className="field">
+                <label htmlFor="rotate-angle">Rotation</label>
+                <select
+                  id="rotate-angle"
+                  value={rotateAngle}
+                  onChange={(event) => setRotateAngle(Number(event.target.value) as RotateAngle)}
+                >
+                  <option value="90">90 degrees</option>
+                  <option value="180">180 degrees</option>
+                  <option value="270">270 degrees</option>
+                </select>
+              </div>
+            ) : null}
+
+            {activeTool === "split" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="split-mode">Split mode</label>
+                  <select
+                    id="split-mode"
+                    value={splitMode}
+                    onChange={(event) => setSplitMode(event.target.value as SplitMode)}
+                  >
+                    <option value="ranges">By ranges</option>
+                    <option value="equal-parts">Equal parts</option>
+                    <option value="every-n-pages">Every N pages</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="split-value">
+                    {splitMode === "ranges" ? "Ranges" : splitMode === "equal-parts" ? "Number of parts" : "Pages per split"}
+                  </label>
+                  <input
+                    id="split-value"
+                    inputMode={splitMode === "ranges" ? "text" : "numeric"}
+                    placeholder={
+                      splitMode === "ranges"
+                        ? "1-3, 4-6, 7-10"
+                        : splitMode === "equal-parts"
+                          ? "3"
+                          : "5"
+                    }
+                    value={splitValue}
+                    onChange={(event) => setSplitValue(event.target.value)}
+                  />
+                </div>
+                <div className="tool-summary">{splitSummary}</div>
+              </div>
+            ) : activeTool === "merge" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="merge-stage">Merge staging</label>
+                  <input
+                    id="merge-stage"
+                    readOnly
+                    value={mergeCandidates.length > 0 ? `${mergeCandidates.length} files staged` : "No files staged yet"}
+                  />
+                </div>
+                <div className="tool-summary">{mergeSummary}</div>
+                <button className="button secondary" onClick={() => fileInputRef.current?.click()} type="button">
+                  Select PDFs to merge
+                </button>
+                {mergeCandidates.length > 0 ? (
+                  <div className="merge-list">
+                    {mergeCandidates.map((file, index) => (
+                      <article
+                        className={`merge-card${draggedMergeIndex === index ? " is-dragging" : ""}`}
+                        draggable
+                        key={`${file.name}-${index}`}
+                        onDragStart={() => handleMergeCardDragStart(index)}
+                        onDragOver={handleMergeCardDragOver}
+                        onDrop={() => handleMergeCardDrop(index)}
+                        onDragEnd={handleMergeCardDragEnd}
+                      >
+                        <div className="merge-card-header">
+                          <div>
+                            <strong>{index + 1}. {file.name}</strong>
+                            <div className="muted">{formatFileSize(file.size)}</div>
+                          </div>
+                          <div className="merge-card-actions">
+                            <button
+                              aria-label={`Move ${file.name} up`}
+                              className="button secondary"
+                              disabled={index === 0}
+                              onClick={() => moveMergeCandidate(index, -1)}
+                              type="button"
+                            >
+                              Up
+                            </button>
+                            <button
+                              aria-label={`Move ${file.name} down`}
+                              className="button secondary"
+                              disabled={index === mergeCandidates.length - 1}
+                              onClick={() => moveMergeCandidate(index, 1)}
+                              type="button"
+                            >
+                              Down
+                            </button>
+                          </div>
+                        </div>
+                        <div className="muted merge-card-hint">Drag to reorder</div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : activeTool === "compress" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="compression-level">Compression level</label>
+                  <select
+                    id="compression-level"
+                    value={compressionLevel}
+                    onChange={(event) => setCompressionLevel(event.target.value as CompressionLevel)}
+                  >
+                    <option value="balanced">Balanced</option>
+                    <option value="maximum">Maximum</option>
+                  </select>
+                </div>
+                <div className="tool-summary">{compressionSummary}</div>
+              </div>
+            ) : (
+              <div className="tool-summary">{targetPageSummary}</div>
+            )}
+
+            <div className="operation-actions">
+              <button className="button" onClick={() => void runActiveTool()} type="button">
+                {activeTool === "extract"
+                  ? "Extract selected pages"
+                  : activeTool === "delete"
+                    ? "Delete selected pages"
+                    : activeTool === "rotate"
+                      ? `Rotate selected pages ${rotateAngle}°`
+                      : activeTool === "split"
+                        ? "Split and download ZIP"
+                        : activeTool === "compress"
+                          ? `Compress PDF (${compressionLevel})`
+                          : "Merge and download"}
+              </button>
+            </div>
+
+            {summary && parsedRange.pages.length > 0 ? (
+              <div className="tag">{parsedRange.pages.length} pages selected from range input</div>
+            ) : null}
+
+            {selectedPages.length > 0 ? (
+              <div className="tag">Selected pages: {selectedRangeSummary}</div>
+            ) : null}
+
+            {!parsedRange.valid ? (
+              <div className="notice">Invalid range entries: {parsedRange.invalidEntries.join(", ")}</div>
+            ) : null}
+
             <button
               className="button secondary"
               disabled={undoStack.length === 0}
@@ -739,18 +1163,6 @@ function WorkspaceApp() {
               Undo
             </button>
           </div>
-
-          {summary && parsedRange.pages.length > 0 ? (
-            <div className="tag">{parsedRange.pages.length} pages selected from range input</div>
-          ) : null}
-
-          {selectedPages.length > 0 ? (
-            <div className="tag">Selected pages: {selectedRangeSummary}</div>
-          ) : null}
-
-          {!parsedRange.valid ? (
-            <div className="notice">Invalid range entries: {parsedRange.invalidEntries.join(", ")}</div>
-          ) : null}
 
           {notice ? <div className="notice">{notice}</div> : null}
         </aside>
@@ -769,12 +1181,12 @@ function WorkspaceApp() {
             </div>
           ) : null}
 
-          {mergeCandidates.length > 0 ? (
+          {mergeCandidates.length > 0 && activeTool !== "merge" ? (
             <>
               <div className="eyebrow">Merge staging</div>
               <h2>Ready to order {mergeCandidates.length} files</h2>
               <p className="muted">
-                This shell now captures the popup merge intent and validates the file-size cap locally. The merge engine and drag reordering flow can build on this staged list.
+                Reorder your staged PDFs to control merge order, then run a local merge and download the combined file.
               </p>
               <div className="merge-toolbar">
                 <button className="button" onClick={() => void runMerge()} type="button">
@@ -889,7 +1301,7 @@ function WorkspaceApp() {
               <div className="eyebrow">Ready</div>
               <h2>Open a local PDF to begin.</h2>
               <p className="muted">
-                This shell is set up for local file validation, metadata parsing, and thumbnail rendering as the foundation for extract, split, merge, reorder, and rotate flows.
+                Local processing is enabled for extract, delete, rotate, split, and merge workflows with no upload required.
               </p>
             </div>
           )}

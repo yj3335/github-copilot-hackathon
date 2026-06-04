@@ -1,25 +1,70 @@
 # PDF Toolkit Platform
 
-Cross-browser, local-first PDF toolkit platform with three delivery surfaces:
+Local-first PDF editing for teams that care about privacy, speed, and cross-browser access.
 
-- `apps/extension`: browser extension shell for Chrome, Edge, Firefox, and Safari-style WebExtensions.
-- `apps/landing-page`: Azure-hosted landing page and download/distribution API.
-- `packages/*`: shared logic for PDF validation, browser detection, and future engine abstractions.
-- `infra`: Docker and Azure deployment scaffolding.
+PDF Toolkit Platform delivers a complete browser-extension workflow for day-to-day PDF operations while keeping files on-device, plus a landing and distribution surface for browser-specific installs.
 
-## Repository Status
+## Why This Project
 
-This repo is now initialized as the starter workspace for the requirements document. The current codebase focuses on foundation work:
+- Privacy-first: PDF files are processed locally in the extension runtime, not uploaded to a server.
+- Cross-browser delivery: one codebase, packaged outputs for Chrome, Edge, Firefox, and Safari-style distribution.
+- Real workflows: merge, split, extract, delete, rotate, and compress are already working in the workspace.
+- Product-ready shell: extension UI, settings, landing page API, CI, and infra are in place.
 
-- monorepo structure and workspace boundaries
-- extension popup, workspace, and settings shells
-- landing page server with browser-aware download routing
-- shared validation helpers and basic tests
-- Azure Container Apps and CI scaffolding
+## Features Implemented Today
 
-It is not a full implementation of all PDF operations yet. The current implementation is the baseline for building the PDF engine, browser packaging, and release automation next.
+### Extension workspace
 
-## Project Layout
+- Local PDF load with validation and safety confirmation for large files.
+- Progressive thumbnail rendering for full documents.
+- Page targeting through range input plus click, multi-select, and shift-range selection.
+- Preview modal for page inspection.
+- Contextual tool toolbar with dedicated modes:
+	- Extract pages
+	- Delete pages
+	- Rotate pages (90/180/270)
+	- Split to ZIP (ranges, equal parts, every N pages)
+	- Compress PDF (balanced and maximum modes)
+	- Merge PDFs
+    - Watermarking
+    - Password protection
+    - Esignature
+- Merge staging in sidebar with Up/Down controls and drag-and-drop ordering.
+- Undo for in-workspace document mutations.
+- Human-readable metadata dates and cleaner filename normalization across operations.
+
+### Password and protected files
+
+- Password prompt flow on protected PDF load.
+- Password context reused for single-file operations in the workspace flow.
+
+### Popup and settings
+
+- Popup quick actions for opening single files, opening merge flow, and opening workspace/settings.
+- Local settings persistence in extension storage for filename pattern and layout preference.
+
+### Packaging and distribution
+
+- Build pipeline for extension bundles.
+- Browser packaging command that generates:
+	- unpacked outputs for chrome, edge, firefox, safari
+	- zipped artifacts per browser in apps/extension/dist-packages
+
+### Landing page and APIs
+
+- Express landing server with static site hosting.
+- Health endpoint: /health
+- Browser detection endpoint: /api/browser
+- Download selection endpoint: /api/download (browser-aware package URL response)
+
+### Platform and engineering foundation
+
+- npm workspace monorepo structure.
+- Shared utility package for browser detection, filename safety, and range parsing.
+- PDF core package with local mutation helpers.
+- CI workflow and Azure Container Apps infrastructure scaffolding.
+
+## Repository Layout
 
 ```text
 .
@@ -33,7 +78,7 @@ It is not a full implementation of all PDF operations yet. The current implement
 └── .github
 ```
 
-## Local Setup
+## Quick Start
 
 ```sh
 npm install
@@ -41,15 +86,28 @@ npm test
 npm run build
 ```
 
-## Design Constraints
+Build extension only:
 
-- PDF content is intended to stay local to the browser runtime.
-- Extension manifests keep permissions minimal.
-- Landing page delivery is structured for Azure Container Apps plus CDN-backed downloads.
-- Shared utilities are kept outside app folders to reduce browser drift.
+```sh
+npm run build --workspace @pdf-toolkit/extension
+```
 
-## Next Build Steps
+Generate browser-specific packages:
 
-1. Wire a real PDF worker and operation queue into the extension workspace.
-2. Add browser-specific packaging outputs for Chrome, Firefox, Edge, and Safari.
-3. Replace placeholder CDN URLs with Azure Blob Storage and update manifest feeds.
+```sh
+npm run package:browsers --workspace @pdf-toolkit/extension
+```
+
+## Design Principles
+
+- Keep PDF bytes local to the browser runtime wherever possible.
+- Keep extension permissions minimal.
+- Share logic across apps to reduce browser drift and duplicated behavior.
+- Keep shipping in small, testable increments.
+
+## What Is Next
+
+- Add watermark tooling to the contextual workspace toolbar.
+- Strengthen encrypted PDF support across all mutation paths.
+- Replace placeholder download URLs with Azure Blob Storage backed release artifacts.
+- Continue UX polish and production hardening across browsers.
