@@ -3,19 +3,203 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PDFsafe</title>
+    <title>PDFsafe — local-first PDF toolkit</title>
+    <meta
+      name="description"
+      content="Local-first PDF editing for teams that care about privacy, speed, and cross-browser access."
+    />
+    <meta property="og:title" content="PDFsafe" />
+    <meta
+      property="og:description"
+      content="Local-first PDF editing for teams that care about privacy, speed, and cross-browser access."
+    />
+    <meta property="og:image" content="/images/pdfsafe_logo.png" />
+    <link rel="icon" href="/images/pdfsafe_logo.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="page-shell">
-      <section class="hero">
-        <p class="eyebrow">PDFsafe</p>
-        <h1>PDFsafe</h1>
-        <p class="lede">Cross-browser, local-first PDF toolkit platform.</p>
-        <div class="download-panel">
-          <button id="primary-download" class="primary-action">Download extension</button>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="top-nav">
+      <div class="brand-mini" aria-label="PDFsafe">
+        <img src="/images/pdfsafe_logo.png" alt="PDFsafe logo" width="28" height="28" />
+        <span>PDFsafe</span>
+      </div>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#workflows" class="is-active">Workflow</a>
+        <a href="#security">Security</a>
+        <a href="#distribution">Distribution</a>
+        <a href="#download">Download</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <section class="hero" id="download" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="brand-lockup">
+            <img src="/images/pdfsafe_logo.png" alt="PDFsafe logo" width="64" height="64" />
+            <h1 id="hero-title">PDFsafe</h1>
+          </div>
+          <p class="tagline">
+            Local-first PDF editing for teams that care about privacy, speed, and cross-browser
+            access.
+          </p>
+          <div class="hero-actions">
+            <button id="primary-download" class="primary-action">Download extension</button>
+            <p class="supporting-copy">
+              Works across Chrome, Edge, Firefox, and Safari-style installs.
+            </p>
+          </div>
+          <div class="hero-metadata">
+            <div>
+              <p class="meta-label">Workspace tools</p>
+              <p class="meta-value">Merge, split, extract, delete, rotate, compress.</p>
+            </div>
+            <div>
+              <p class="meta-label">Packaging</p>
+              <p class="meta-value">Unpacked and zipped outputs per browser.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-preview" aria-label="Workspace preview">
+          <div class="app-shell">
+            <div class="app-topbar">
+              <div class="window-dots">
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+                <span class="window-dot"></span>
+              </div>
+              <span class="app-title">Workspace</span>
+            </div>
+            <div class="app-body">
+              <aside class="app-sidebar">
+                <p class="app-label">Tools</p>
+                <ul>
+                  <li>Extract pages</li>
+                  <li>Rotate 90/180/270</li>
+                  <li>Split to ZIP</li>
+                  <li>Compress</li>
+                  <li>Merge PDFs</li>
+                </ul>
+              </aside>
+              <div class="app-main">
+                <div class="app-card">
+                  <p class="app-heading">Local PDF load</p>
+                  <p>Validation and safety confirmation for large files.</p>
+                </div>
+                <div class="app-card">
+                  <p class="app-heading">Page targeting</p>
+                  <p>Range input, multi-select, and shift-range selection.</p>
+                </div>
+                <div class="app-card">
+                  <p class="app-heading">Merge staging</p>
+                  <p>Drag-and-drop ordering with undo.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
+
+      <section class="section" id="workflows" aria-labelledby="workflow-title">
+        <div class="section-header">
+          <p class="section-label">Workflow depth</p>
+          <h2 id="workflow-title">Built for real PDF work, not demos.</h2>
+          <p class="section-subtitle">
+            The extension workspace already supports full-document operations with fast previewing
+            and range-based targeting.
+          </p>
+        </div>
+        <div class="feature-layout">
+          <article class="card card-primary">
+            <h3>Workspace operations</h3>
+            <ul class="feature-list">
+              <li>Local PDF load with validation and large-file safety confirmation.</li>
+              <li>Progressive thumbnails plus a preview modal for page inspection.</li>
+              <li>Contextual toolbar modes for extract, delete, rotate, split, compress, and merge.</li>
+              <li>Merge staging with up/down controls and drag-and-drop ordering.</li>
+              <li>Undo support for in-workspace document mutations.</li>
+            </ul>
+          </article>
+          <div class="card-stack">
+            <article class="card">
+              <h3>Password-aware flows</h3>
+              <p>Password prompts are built into load and reuse for single-file operations.</p>
+            </article>
+            <article class="card">
+              <h3>Popup and settings</h3>
+              <p>
+                Quick actions for open, merge, workspace, and settings with local preferences saved
+                in extension storage.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="security" aria-labelledby="security-title">
+        <div class="section-header">
+          <p class="section-label">Privacy and control</p>
+          <h2 id="security-title">Keep PDF bytes in the browser runtime.</h2>
+          <p class="section-subtitle">
+            The platform is designed to keep files on-device with minimal permissions and shared
+            utilities to reduce drift.
+          </p>
+        </div>
+        <div class="split-panel">
+          <article class="card card-secondary">
+            <h3>Local-first processing</h3>
+            <p>No upload pipeline. Edits run inside the extension runtime for fast, private work.</p>
+          </article>
+          <article class="card">
+            <h3>Shared utilities</h3>
+            <p>Browser detection, filename safety, and range parsing live in shared packages.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="distribution" aria-labelledby="distribution-title">
+        <div class="section-header">
+          <p class="section-label">Distribution surface</p>
+          <h2 id="distribution-title">Packaging, API routing, and delivery are ready.</h2>
+          <p class="section-subtitle">
+            Build outputs cover every major browser with a landing server that routes downloads
+            intelligently.
+          </p>
+        </div>
+        <div class="feature-layout">
+          <article class="card card-primary">
+            <h3>Browser packaging</h3>
+            <p>
+              Generate unpacked outputs and zipped artifacts for Chrome, Edge, Firefox, and
+              Safari-style distribution.
+            </p>
+            <div class="chip-row">
+              <span>Chrome</span>
+              <span>Edge</span>
+              <span>Firefox</span>
+              <span>Safari</span>
+            </div>
+          </article>
+          <div class="card-stack">
+            <article class="card">
+              <h3>Landing page APIs</h3>
+              <p>Health checks, browser detection, and download selection endpoints are wired.</p>
+            </article>
+            <article class="card">
+              <h3>Platform foundation</h3>
+              <p>Monorepo structure, PDF core helpers, CI, and Azure scaffolding are in place.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p>
+          PDFsafe is a local-first PDF toolkit platform built for day-to-day operations across
+          browsers.
+        </p>
+      </footer>
     </main>
     <script type="module" src="/main.js"></script>
   </body>

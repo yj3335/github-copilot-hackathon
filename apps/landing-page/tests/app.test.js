@@ -41,8 +41,11 @@ test("landing page renders PDFsafe scaffold", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/`);
     const html = await response.text();
     assert.equal(response.status, 200);
-    assert.match(html, /PDFsafe/);
-    assert.match(html, /Cross-browser, local-first PDF toolkit platform\./);
+    assert.match(
+      html,
+      /Local-first PDF editing for teams that care about privacy, speed, and cross-browser access\./
+    );
+    assert.match(html, /pdfsafe_logo\.png/);
     assert.match(html, /Download extension/);
   } finally {
     server.close();
