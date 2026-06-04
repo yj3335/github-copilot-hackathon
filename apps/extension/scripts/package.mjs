@@ -34,7 +34,11 @@ function withBrowserManifest(baseManifest, browser) {
 
 async function zipBundle(directoryPath, outputZipPath) {
   try {
-    await runExecFile("zip", ["-qr", outputZipPath, "."], { cwd: directoryPath });
+    if (process.platform === "win32") {
+      await runExecFile("powershell", ["-Command", `Compress-Archive -Path '${directoryPath}\\*' -DestinationPath '${outputZipPath}' -Force`]);
+    } else {
+      await runExecFile("zip", ["-qr", outputZipPath, "."], { cwd: directoryPath });
+    }
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
     throw new Error(`Unable to create zip archive for ${directoryPath}: ${details}`);

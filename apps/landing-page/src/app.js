@@ -27,19 +27,40 @@ export function createApp() {
 
   app.get("/api/download", (request, response) => {
     const requestedBrowser = String(request.query.browser || "").toLowerCase();
-    const detected = detectBrowser(request.get("user-agent"));
-    const browser = requestedBrowser || detected.browser;
+    const browser = detectBrowser(request.get("user-agent"));
+    const targetBrowser = requestedBrowser || browser.name;
 
-    if (!["chrome", "edge", "firefox", "safari"].includes(browser)) {
-      response.status(400).json({ error: "Unsupported browser selection." });
-      return;
+    let packagePath = "";
+    if (targetBrowser.includes("chrome")) {
+      packagePath = `/packages/local-pdf-toolkit-chrome-v0.1.0.zip`;
+    } else if (targetBrowser.includes("firefox")) {
+      packagePath = `/packages/local-pdf-toolkit-firefox-v0.1.0.zip`;
+    } else if (targetBrowser.includes("edge")) {
+      packagePath = `/packages/local-pdf-toolkit-edge-v0.1.0.zip`;
+    } else if (targetBrowser.includes("safari")) {
+      packagePath = `/packages/local-pdf-toolkit-safari-v0.1.0.zip`;
+    } else {
+      packagePath = `/packages/local-pdf-toolkit-chrome-v0.1.0.zip`;
     }
 
-    response.json({
-      browser,
-      version: "0.1.0",
-      url: `https://cdn.example.com/packages/v0.1.0/${browser}/extension${browser === "firefox" ? ".xpi" : browser === "safari" ? ".safariextz" : ".crx"}`
-    });
+    response.json({ url: packagePath });
+  });
+
+  // Using direct Blob Storage URL since Azure Front Door is blocked on Free/Student subscriptions
+  const CDN_BASE_URL = process.env.CDN_URL || "https://pdfstorewfqdnxorez.blob.core.windows.net";
+
+  app.get("/api/updates/:browser.xml", (request, response) => {
+    const browser = String(request.params.browser).toLowerCase();
+    const ext = browser === "firefox" ? ".xpi" : browser === "safari" ? ".safariextz" : ".crx";
+    const downloadUrl = `${CDN_BASE_URL}/packages/v0.1.0/${browser}/extension${ext}`;
+    
+    response.type('application/xml');
+    response.send(`<?xml version='1.0' encoding='UTF-8'?>
+<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
+  <app appid='your-extension-id-here'>
+    <updatecheck codebase='${downloadUrl}' version='0.1.0' />
+  </app>
+</gupdate>`);
   });
 
   app.get("*", (_request, response) => {
