@@ -1,7 +1,11 @@
 import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
-import { formatFileSize, parsePageRangeInput, validatePdfFile } from "@pdf-toolkit/pdf-core";
+import {
+  formatFileSize,
+  parsePageRangeInput,
+  validatePdfFile
+} from "../../../packages/pdf-core/src/index";
 
 GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("pdf.worker.mjs");
 

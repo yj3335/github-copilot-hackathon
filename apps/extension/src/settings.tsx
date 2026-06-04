@@ -18,8 +18,15 @@ function SettingsApp() {
   const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.storage.local.get(DEFAULT_SETTINGS, (storedSettings) => {
-      setSettings(storedSettings as ExtensionSettings);
+    chrome.storage.local.get(["filenamePattern", "workspaceLayout"], (storedSettings) => {
+      setSettings({
+        filenamePattern:
+          typeof storedSettings.filenamePattern === "string"
+            ? storedSettings.filenamePattern
+            : DEFAULT_SETTINGS.filenamePattern,
+        workspaceLayout:
+          storedSettings.workspaceLayout === "list" ? "list" : DEFAULT_SETTINGS.workspaceLayout
+      });
     });
   }, []);
 

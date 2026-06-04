@@ -23,7 +23,7 @@ await build({
   minify: false,
   outdir: distDir,
   sourcemap: true,
-  target: "chrome110,firefox109,safari16"
+  target: ["chrome110", "firefox109", "safari16"]
 });
 
 await cp(resolve(rootDir, "public"), distDir, { recursive: true });

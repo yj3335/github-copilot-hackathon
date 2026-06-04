@@ -1,15 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "types": [
       "chrome"
-    ],
-    "paths": {
-      "@pdf-toolkit/pdf-core": [
-        "../../packages/pdf-core/src"
-      ]
-    }
+    ]
   },
   "include": [
     "src/**/*",
