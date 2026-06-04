@@ -59,7 +59,7 @@ interface OperationHistoryEntry {
 
 type ExecutableOperation = "Extract" | "Delete" | "Rotate 90°" | "Rotate 180°" | "Rotate 270°";
 type SplitMode = "ranges" | "equal-parts" | "every-n-pages";
-type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge" | "watermark" | "decrypt";
+type ToolMode = "extract" | "delete" | "rotate" | "split" | "compress" | "merge" | "watermark" | "decrypt" | "esign";
 type RotateAngle = 90 | 180 | 270;
 
 type PdfPageReader = {
@@ -215,6 +215,13 @@ function WorkspaceApp() {
   const [watermarkRotation, setWatermarkRotation] = useState(45);
   const [watermarkPosition, setWatermarkPosition] = useState<WatermarkPosition>("center");
   const [watermarkFont, setWatermarkFont] = useState<WatermarkFont>("Helvetica");
+  const [signatureText, setSignatureText] = useState("Signed electronically");
+  const [signatureFontSize, setSignatureFontSize] = useState(24);
+  const [signatureColor, setSignatureColor] = useState("#1F1A16");
+  const [signatureOpacity, setSignatureOpacity] = useState(85);
+  const [signaturePosition, setSignaturePosition] = useState<WatermarkPosition>("bottom-right");
+  const [signatureFont, setSignatureFont] = useState<WatermarkFont>("Times");
+  const [signatureIncludeDate, setSignatureIncludeDate] = useState(true);
   const [decryptPassword, setDecryptPassword] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -406,7 +413,9 @@ function WorkspaceApp() {
                 ? "Watermark"
                 : activeTool === "decrypt"
                   ? "Unlock"
-                  : "Merge";
+                  : activeTool === "esign"
+                    ? "E-sign"
+                    : "Merge";
 
   const activeToolDescription =
     activeTool === "extract"
@@ -423,7 +432,9 @@ function WorkspaceApp() {
                 ? "Add a text watermark to selected pages (or all pages if none selected)."
                 : activeTool === "decrypt"
                   ? "Remove password protection and download an unlocked copy."
-                  : "Choose multiple PDFs, order them, and download a merged document.";
+                  : activeTool === "esign"
+                    ? "Place an electronic signature mark on selected pages."
+                    : "Choose multiple PDFs, order them, and download a merged document.";
 
   const handleThumbnailSelection = (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -482,6 +493,11 @@ function WorkspaceApp() {
 
     if (activeTool === "watermark") {
       await runWatermark();
+      return;
+    }
+
+    if (activeTool === "esign") {
+      await runESign();
       return;
     }
 
@@ -559,6 +575,65 @@ function WorkspaceApp() {
     } catch (error) {
       console.error("operation_failed", { operation: "Watermark", timestamp: new Date().toISOString(), error });
       setNotice(error instanceof Error ? error.message : "Watermark operation failed.");
+    } finally {
+      setOperationProgress(null);
+    }
+  };
+
+  const runESign = async () => {
+    if (!summary) {
+      setNotice("Load a PDF before adding an e-signature.");
+      return;
+    }
+
+    if (!signatureText.trim()) {
+      setNotice("Enter signature text before applying.");
+      return;
+    }
+
+    const targetPages = effectiveTargetPages.length > 0
+      ? effectiveTargetPages
+      : [summary.pageCount];
+
+    const signaturePayload = signatureIncludeDate
+      ? `${signatureText} - ${new Date().toLocaleDateString()}`
+      : signatureText;
+
+    setOperationProgress({ name: "E-sign", percent: 20 });
+    setNotice(null);
+
+    try {
+      pushUndoState(summary.file);
+      setOperationProgress({ name: "E-sign", percent: 50 });
+
+      const config: TextWatermarkConfig = {
+        type: "text",
+        text: signaturePayload,
+        fontSize: signatureFontSize,
+        color: signatureColor,
+        opacity: signatureOpacity,
+        rotation: 0,
+        position: signaturePosition,
+        font: signatureFont,
+        pageNumbers: targetPages
+      };
+
+      const result = await watermarkPdf(summary.file, config);
+      setOperationProgress({ name: "E-sign", percent: 100 });
+      await applyMutatedDocument(result.bytes, result.filename || `${getCanonicalPdfBaseName(summary.file.name)}-esign.pdf`);
+      setNotice(`E-sign applied to ${targetPages.length} pages.`);
+      setOperationHistory((current) => [
+        {
+          id: `ESign-${Date.now()}`,
+          name: "E-sign",
+          pages: targetPages.join(", "),
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...current
+      ].slice(0, 10));
+    } catch (error) {
+      console.error("operation_failed", { operation: "E-sign", timestamp: new Date().toISOString(), error });
+      setNotice(error instanceof Error ? error.message : "E-sign operation failed.");
     } finally {
       setOperationProgress(null);
     }
@@ -1124,6 +1199,15 @@ function WorkspaceApp() {
               Watermark
             </button>
             <button
+              aria-selected={activeTool === "esign"}
+              className={`button secondary tool-tab${activeTool === "esign" ? " is-active" : ""}`}
+              onClick={() => setActiveTool("esign")}
+              role="tab"
+              type="button"
+            >
+              E-sign
+            </button>
+            <button
               aria-selected={activeTool === "decrypt"}
               className={`button secondary tool-tab${activeTool === "decrypt" ? " is-active" : ""}`}
               onClick={() => setActiveTool("decrypt")}
@@ -1316,6 +1400,65 @@ function WorkspaceApp() {
                     : "Will apply to all pages (select specific pages to limit)"}
                 </div>
               </div>
+            ) : activeTool === "esign" ? (
+              <div className="split-panel">
+                <div className="field">
+                  <label htmlFor="esign-text">Signature</label>
+                  <input
+                    id="esign-text"
+                    maxLength={200}
+                    value={signatureText}
+                    onChange={(e) => setSignatureText(e.target.value)}
+                    placeholder="Signed electronically"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="esign-font">Font</label>
+                  <select id="esign-font" value={signatureFont} onChange={(e) => setSignatureFont(e.target.value as WatermarkFont)}>
+                    <option value="Times">Times</option>
+                    <option value="Helvetica">Helvetica</option>
+                    <option value="Courier">Courier</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="esign-size">Font size ({signatureFontSize}pt)</label>
+                  <input id="esign-size" type="range" min="10" max="72" value={signatureFontSize} onChange={(e) => setSignatureFontSize(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="esign-color">Color</label>
+                  <input id="esign-color" type="color" value={signatureColor} onChange={(e) => setSignatureColor(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="esign-opacity">Opacity ({signatureOpacity}%)</label>
+                  <input id="esign-opacity" type="range" min="10" max="100" value={signatureOpacity} onChange={(e) => setSignatureOpacity(Number(e.target.value))} />
+                </div>
+                <div className="field">
+                  <label htmlFor="esign-position">Position</label>
+                  <select id="esign-position" value={signaturePosition} onChange={(e) => setSignaturePosition(e.target.value as WatermarkPosition)}>
+                    <option value="bottom-right">Bottom Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="center">Center</option>
+                  </select>
+                </div>
+                <label className="field" htmlFor="esign-include-date">
+                  <span>Include date</span>
+                  <select
+                    id="esign-include-date"
+                    value={signatureIncludeDate ? "yes" : "no"}
+                    onChange={(e) => setSignatureIncludeDate(e.target.value === "yes")}
+                  >
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </label>
+                <div className="tool-summary">
+                  {effectiveTargetPages.length > 0
+                    ? `Will apply to ${effectiveTargetPages.length} selected pages`
+                    : `No pages selected, will apply to page ${summary?.pageCount ?? 1}`}
+                </div>
+              </div>
             ) : activeTool === "decrypt" ? (
               <div className="split-panel">
                 <div className="field">
@@ -1350,6 +1493,8 @@ function WorkspaceApp() {
                           ? `Compress PDF (${compressionLevel})`
                           : activeTool === "watermark"
                             ? "Apply watermark"
+                            : activeTool === "esign"
+                              ? "Apply e-sign"
                             : activeTool === "decrypt"
                               ? "Remove password"
                               : "Merge and download"}
