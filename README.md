@@ -4,6 +4,10 @@ Local-first PDF editing for teams that care about privacy, speed, and cross-brow
 
 pdfsave delivers a complete browser-extension workflow for day-to-day PDF operations while keeping files on-device, plus a landing and distribution surface for browser-specific installs.
 
+Presentation (Slides) : https://drive.google.com/file/d/1bBPDmOWNREFMRQpdg6y49clW2O33VQ5l/view?usp=sharing
+
+Demo Video : https://drive.google.com/file/d/1EfQEcZ6XUbvTqENMihd6apvEFIHhqZ-4/view?usp=drive_link
+
 ## Why This Project
 
 - Privacy-first: PDF files are processed locally in the extension runtime, not uploaded to a server.
